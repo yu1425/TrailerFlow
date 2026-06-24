@@ -10,7 +10,7 @@ export interface StartOverlayProps {
  */
 export default function StartOverlay({ onStart }: StartOverlayProps) {
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-lobby-bg px-6 text-center animate-fade-in">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-lobby-bg px-6 text-center">
       <div
         className="pointer-events-none absolute inset-0 opacity-40"
         style={{
@@ -18,7 +18,7 @@ export default function StartOverlay({ onStart }: StartOverlayProps) {
             "radial-gradient(circle at 50% 30%, var(--accent-soft), transparent 60%)",
         }}
       />
-      <div className="relative flex flex-col items-center">
+      <div className="relative flex flex-col items-center animate-fade-in">
         <p className="mb-3 text-sm uppercase tracking-[0.3em] text-accent">
           Now Showing
         </p>
@@ -41,7 +41,7 @@ export default function StartOverlay({ onStart }: StartOverlayProps) {
         </button>
 
         <p className="mt-6 max-w-xs text-xs text-white/40">
-          音が出ます。続けて再生され、終わると自動で次の予告編に進みます。
+          ミュートからはじまります。下のミュートボタンで音声をオンにできます。
         </p>
       </div>
     </div>

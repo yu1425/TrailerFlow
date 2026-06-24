@@ -15,6 +15,7 @@ import NextUpOverlay from "@/components/NextUpOverlay";
 import DebugPanel, { type DebugStats } from "@/components/DebugPanel";
 import ShortcutsHelp, { useShortcutsHelp } from "@/components/ShortcutsHelp";
 import { getOrCreateAnonymousUserId } from "@/lib/anonymousUser";
+import { loadYouTubeApi } from "@/lib/youtube";
 import { trackEvent } from "@/lib/events";
 import { addToWatchlist, removeFromWatchlist } from "@/lib/watchlist";
 import {
@@ -28,6 +29,10 @@ const DEFAULT_CHANNEL = "lobby";
 const CHANNEL_STORAGE_KEY = "trailerflow.channel";
 const LANGUAGE_STORAGE_KEY = "trailerflow.preferredLanguage";
 const TRANSITION_SAFETY_MS = 2500;
+// If the initial feed fetch hasn't resolved by this point we surface the retry
+// CTA instead of leaving the visitor on the lobby spinner forever. Real fetches
+// return in <1s; 15s is generous for cold-start cases.
+const FEED_FETCH_TIMEOUT_MS = 15000;
 
 const DEBUG_ENABLED = process.env.NEXT_PUBLIC_DEBUG_PANEL === "true";
 
@@ -58,7 +63,10 @@ export default function HomePage() {
   const [preferredLanguage, setPreferredLanguage] =
     useState<PreferredLanguage>("ja");
   const [hasStarted, setHasStarted] = useState(false);
-  const [muted, setMuted] = useState(false);
+  // Start muted so the YouTube IFrame autoplay policy lets the first trailer
+  // roll immediately after the StartOverlay click. Visitors can flip the
+  // ActionBar's mute button to bring sound back.
+  const [muted, setMuted] = useState(true);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [watchlistedIds, setWatchlistedIds] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
@@ -108,12 +116,24 @@ export default function HomePage() {
       if (exclude.length > 0) {
         params.set("recentlyWatchedMovieIds", exclude.join(","));
       }
-      const res = await fetch(`/api/feed?${params.toString()}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error(`Feed request failed: ${res.status}`);
-      const data = (await res.json()) as FeedResponse;
-      return data.items;
+      // Abort if the network hangs so the LobbyLoading screen never gets
+      // stuck on the rotating "予告編を準備しています…" message.
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        FEED_FETCH_TIMEOUT_MS,
+      );
+      try {
+        const res = await fetch(`/api/feed?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`Feed request failed: ${res.status}`);
+        const data = (await res.json()) as FeedResponse;
+        return data.items;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
     [],
   );
@@ -159,6 +179,10 @@ export default function HomePage() {
         setWatchlistedIds(new Set(d.items.map((it) => it.movie.id))),
       )
       .catch(() => undefined);
+
+    // Warm the YouTube IFrame API in the background so the player mounts
+    // faster the moment the visitor dismisses the StartOverlay.
+    loadYouTubeApi().catch(() => undefined);
 
     void runInitialLoad(userId, initialChannel, initialLang);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -516,11 +540,13 @@ export default function HomePage() {
                       もう一度浴びる
                     </button>
                   </div>
-                ) : (
+                ) : hasStarted ? (
+                  // StartOverlay covers the pre-start state, so this text only
+                  // shows during the brief mid-session refill window.
                   <p className="animate-pulse text-white/40">
                     予告編を準備しています…
                   </p>
-                )}
+                ) : null}
               </div>
             )}
 
@@ -558,11 +584,13 @@ export default function HomePage() {
           onWatchlist={handleWatchlist}
           onLike={handleLike}
           isWatchlisted={isWatchlisted}
+          hasStarted={hasStarted}
         />
       </div>
 
-      {/* Loading / error gate */}
-      {loadError ? (
+      {/* Loading / error gate — skip the full-screen overlay once playback
+          has started so channel/language switches don't blank the screen. */}
+      {loadError && !hasStarted ? (
         <LobbyLoading
           error
           onRetry={() => {
@@ -575,7 +603,7 @@ export default function HomePage() {
             }
           }}
         />
-      ) : isLoading ? (
+      ) : isLoading && !hasStarted ? (
         <LobbyLoading />
       ) : !hasStarted && !feedEmpty ? (
         <StartOverlay onStart={() => setHasStarted(true)} />

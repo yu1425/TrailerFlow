@@ -12,6 +12,12 @@ export interface MovieInfoPanelProps {
   onWatchlist: () => void;
   onLike: () => void;
   isWatchlisted: boolean;
+  /**
+   * When false, the desktop side panel renders an empty state instead of a
+   * "loading…" placeholder. Keeps the lobby quiet before the first trailer
+   * starts playing.
+   */
+  hasStarted?: boolean;
 }
 
 function releaseYear(releaseDate: string | null): string | null {
@@ -203,7 +209,15 @@ export default function MovieInfoPanel({
   onWatchlist,
   onLike,
   isWatchlisted,
+  hasStarted = true,
 }: MovieInfoPanelProps) {
+  // Mobile sheet is rendered only when the user has actually opened it. Before
+  // that, an `inset-0` wrapper covered the screen (pointer-events-none, but
+  // still produced extra layout work and made some screen readers announce an
+  // empty dialog). Skipping the wrapper entirely until `open` keeps the mobile
+  // viewport clean while no one is interacting with the sheet.
+  const renderMobileSheet = open;
+
   return (
     <>
       {/* Desktop: persistent right-side panel */}
@@ -216,53 +230,53 @@ export default function MovieInfoPanel({
             onLike={onLike}
             isWatchlisted={isWatchlisted}
           />
-        ) : (
+        ) : hasStarted ? (
           <p className="text-sm text-white/40">予告編を読み込み中…</p>
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+            <p className="text-xs uppercase tracking-[0.3em] text-accent/80">
+              Now Showing
+            </p>
+            <p className="text-sm text-white/40">
+              再生がはじまると、ここに作品情報が表示されます。
+            </p>
+          </div>
         )}
       </aside>
 
-      {/* Mobile: bottom sheet */}
-      <div
-        className={[
-          "fixed inset-0 z-40 lg:hidden",
-          open ? "pointer-events-auto" : "pointer-events-none",
-        ].join(" ")}
-        aria-hidden={!open}
-      >
+      {/* Mobile: bottom sheet — only mounted while open. */}
+      {renderMobileSheet ? (
         <div
-          onClick={onClose}
-          className={[
-            "absolute inset-0 bg-black/60 transition-opacity",
-            open ? "opacity-100" : "opacity-0",
-          ].join(" ")}
-        />
-        <div
-          className={[
-            "no-scrollbar absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl border-t border-lobby-border bg-lobby-surface p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] transition-transform duration-300",
-            open ? "translate-y-0" : "translate-y-full",
-          ].join(" ")}
+          className="fixed inset-0 z-40 pointer-events-auto lg:hidden"
+          aria-hidden={!open}
         >
-          <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-white/20" />
-          <button
-            type="button"
+          <div
             onClick={onClose}
-            className="mb-4 text-sm text-white/50 hover:text-white"
-          >
-            閉じる
-          </button>
-          {movie ? (
-            <PanelBody
-              movie={movie}
-              trailer={trailer}
-              onWatchlist={onWatchlist}
-              onLike={onLike}
-              isWatchlisted={isWatchlisted}
-            />
-          ) : (
-            <p className="text-sm text-white/40">予告編を読み込み中…</p>
-          )}
+            className="absolute inset-0 bg-black/60 transition-opacity opacity-100"
+          />
+          <div className="no-scrollbar absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl border-t border-lobby-border bg-lobby-surface p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] animate-slide-up">
+            <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-white/20" />
+            <button
+              type="button"
+              onClick={onClose}
+              className="mb-4 text-sm text-white/50 hover:text-white"
+            >
+              閉じる
+            </button>
+            {movie ? (
+              <PanelBody
+                movie={movie}
+                trailer={trailer}
+                onWatchlist={onWatchlist}
+                onLike={onLike}
+                isWatchlisted={isWatchlisted}
+              />
+            ) : (
+              <p className="text-sm text-white/40">予告編を読み込み中…</p>
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
     </>
   );
 }
