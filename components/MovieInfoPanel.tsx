@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import type { FeedMovie } from "@/types/movie";
 import type { FeedTrailer as Trailer } from "@/types/trailer";
 
@@ -48,6 +50,83 @@ const LANGUAGE_LABELS: Record<string, string> = {
   ja: "日本語作品",
   en: "英語作品",
 };
+
+function CandidateButton({
+  movie,
+  trailer,
+}: {
+  movie: FeedMovie;
+  trailer: Trailer | null;
+}) {
+  const [state, setState] = useState<
+    "idle" | "saving" | "saved" | "duplicate" | "error"
+  >("idle");
+  const [savedId, setSavedId] = useState<number | null>(null);
+
+  const handleSave = async () => {
+    if (!trailer?.videoKey) return;
+    setState("saving");
+    try {
+      const res = await fetch("/api/admin/curation/candidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: movie.title,
+          originalTitle: movie.originalTitle,
+          overview: movie.overview,
+          releaseDate: movie.releaseDate,
+          posterUrl: movie.posterUrl,
+          backdropUrl: movie.backdropUrl,
+          genres: movie.genres,
+          language: movie.language,
+          youtubeVideoKey: trailer.videoKey,
+          trailerTitle: trailer.name,
+          trailerLanguage: trailer.language,
+          tmdbId: movie.tmdbId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setSavedId(data.contentId);
+      setState(data.duplicate ? "duplicate" : "saved");
+    } catch {
+      setState("error");
+    }
+  };
+
+  if (state === "saved" || state === "duplicate") {
+    return (
+      <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm">
+        <p className="font-medium text-blue-400">
+          {state === "duplicate"
+            ? "この予告編は既に登録済みです"
+            : "候補として保存しました"}
+        </p>
+        <Link
+          href={`/admin/curation`}
+          className="mt-1.5 inline-block text-xs text-blue-400/80 underline hover:text-blue-300"
+        >
+          管理画面で確認 (ID: {savedId})
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleSave}
+      disabled={state === "saving" || !trailer?.videoKey}
+      className="w-full rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2.5 text-sm font-bold text-blue-400 transition hover:bg-blue-500/20 active:scale-95 disabled:opacity-50"
+    >
+      {state === "saving"
+        ? "保存中..."
+        : state === "error"
+          ? "エラー — もう一度"
+          : "Manual候補に追加"}
+    </button>
+  );
+}
 
 function PanelBody({
   movie,
@@ -175,6 +254,10 @@ function PanelBody({
           ) : null}
           {trailer?.name ? <span>予告編: {trailer.name}</span> : null}
         </div>
+      ) : null}
+
+      {source === "tmdb" ? (
+        <CandidateButton movie={movie} trailer={trailer} />
       ) : null}
 
       {/* External links */}
