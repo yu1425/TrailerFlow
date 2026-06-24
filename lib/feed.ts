@@ -39,6 +39,8 @@ export interface ChannelDefinition {
   name: string;
   description: string;
   config: ChannelConfig;
+  /** When false, the channel is hidden from the public UI but still usable via API. */
+  visible?: boolean;
 }
 
 /**
@@ -53,6 +55,7 @@ export const CHANNELS: ChannelDefinition[] = [
     name: "ロビー",
     description: "いま注目の予告編をバランスよく",
     config: { sort: "balanced" },
+    visible: true,
   },
   {
     id: "new",
@@ -63,12 +66,14 @@ export const CHANNELS: ChannelDefinition[] = [
       sort: "release",
       contentTags: ["新作", "2020年代", "話題作"],
     },
+    visible: false,
   },
   {
     id: "popular",
     name: "人気",
     description: "話題作の予告編を中心に",
     config: { sort: "popularity", contentTags: ["話題作", "名作", "アカデミー賞", "カンヌ"] },
+    visible: false,
   },
   {
     id: "japanese",
@@ -79,6 +84,7 @@ export const CHANNELS: ChannelDefinition[] = [
       contentTags: ["邦画", "日本映画"],
       contentCountries: ["JP"],
     },
+    visible: true,
   },
   {
     id: "action",
@@ -88,6 +94,7 @@ export const CHANNELS: ChannelDefinition[] = [
       genres: [28],
       contentTags: ["アクション", "SF", "アクションアドベンチャー", "アクションRPG", "スパイ", "特撮", "スタント", "カーアクション"],
     },
+    visible: true,
   },
   {
     id: "romance",
@@ -97,6 +104,7 @@ export const CHANNELS: ChannelDefinition[] = [
       genres: [10749],
       contentTags: ["ロマンス", "ラブストーリー", "恋愛", "青春", "初恋"],
     },
+    visible: false,
   },
   {
     id: "horror",
@@ -106,26 +114,33 @@ export const CHANNELS: ChannelDefinition[] = [
       genres: [27],
       contentTags: ["ホラー", "サスペンス", "ゾンビ", "狂気", "ゴシック", "R指定"],
     },
+    visible: false,
   },
   {
     id: "animation",
     name: "アニメ",
     description: "アニメーション作品の予告編",
     config: { genres: [16], contentTypes: ["anime"] },
+    visible: true,
   },
   {
     id: "game",
     name: "ゲーム",
     description: "ゲーム作品の予告編",
     config: { contentTypes: ["game"] },
+    visible: true,
   },
   {
     id: "random",
     name: "ランダム",
     description: "気分を変えてランダムに",
     config: { sort: "random" },
+    visible: true,
   },
 ];
+
+/** Channels visible in the public UI (player bar, /channels page). */
+export const VISIBLE_CHANNELS = CHANNELS.filter((c) => c.visible !== false);
 
 export function getChannel(id: string | null | undefined): ChannelDefinition {
   return CHANNELS.find((c) => c.id === id) ?? CHANNELS[0];

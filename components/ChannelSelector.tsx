@@ -1,6 +1,6 @@
 "use client";
 
-import { CHANNELS } from "@/lib/feed";
+import { VISIBLE_CHANNELS } from "@/lib/feed";
 
 export interface ChannelSelectorProps {
   selected: string;
@@ -22,7 +22,7 @@ export default function ChannelSelector({
   if (variant === "grid") {
     return (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {CHANNELS.map((channel) => {
+        {VISIBLE_CHANNELS.map((channel) => {
           const isActive = channel.id === selected;
           return (
             <button
@@ -49,7 +49,7 @@ export default function ChannelSelector({
 
   return (
     <div className="no-scrollbar touch-scroll flex gap-2 overflow-x-auto px-1 py-1">
-      {CHANNELS.map((channel) => {
+      {VISIBLE_CHANNELS.map((channel) => {
         const isActive = channel.id === selected;
         return (
           <button

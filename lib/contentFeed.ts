@@ -299,10 +299,16 @@ async function fetchContentPool(
   return (data ?? []) as unknown as ContentWithRelations[];
 }
 
+export interface ContentFeedResult {
+  items: FeedItem[];
+  strictMatchCount: number;
+  totalCandidates: number;
+}
+
 export async function buildContentFeed(
   supabase: SupabaseClient,
   options: BuildContentFeedOptions,
-): Promise<FeedItem[]> {
+): Promise<ContentFeedResult> {
   const { limit = 10 } = options;
   const channel = getChannel(options.channel);
   const config = channel.config;
@@ -347,5 +353,15 @@ export async function buildContentFeed(
     rankAndCollect(shuffle(relaxedPool), false);
   }
 
-  return arrangeForDiversity(ranked, limit);
+  const strictMatchCount = ranked.filter((e) => e.strictMatch).length;
+
+  console.log(
+    `[feed] channel=${channel.id} strict=${strictMatchCount} total=${ranked.length}`,
+  );
+
+  return {
+    items: arrangeForDiversity(ranked, limit),
+    strictMatchCount,
+    totalCandidates: ranked.length,
+  };
 }

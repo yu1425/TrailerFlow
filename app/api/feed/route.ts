@@ -45,14 +45,20 @@ export async function GET(request: Request) {
     const mode = getDataMode();
     let items: FeedItem[] = [];
 
+    let strictMatchCount = 0;
+    let totalCandidates = 0;
+
     if (mode === "manual" || mode === "mixed") {
-      items = await buildContentFeed(supabase, {
+      const result = await buildContentFeed(supabase, {
         anonymousUserId,
         channel,
         limit,
         preferredLanguage,
         excludeContentIds: excludeMovieIds,
       });
+      items = result.items;
+      strictMatchCount = result.strictMatchCount;
+      totalCandidates = result.totalCandidates;
     }
 
     // TMDb fallback (or sole source if mode === "tmdb").
@@ -71,7 +77,10 @@ export async function GET(request: Request) {
       items = [...items, ...tmdbItems];
     }
 
-    const body: FeedResponse = { items };
+    const body: FeedResponse & { _debug?: object } = { items };
+    if (searchParams.get("debug") === "1") {
+      body._debug = { strictMatchCount, totalCandidates };
+    }
     return NextResponse.json(body);
   } catch (err) {
     console.error("/api/feed failed", err);

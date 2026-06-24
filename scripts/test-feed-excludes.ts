@@ -83,13 +83,14 @@ async function main() {
           ? Array.from({ length: 40 }, () => Math.floor(Math.random() * 80))
           : [];
 
-      const items = await buildContentFeed(supabase, {
+      const result = await buildContentFeed(supabase, {
         anonymousUserId: `test-${channel.id}-${i}`,
         channel: channel.id,
         limit: LIMIT,
         preferredLanguage: i % 2 === 0 ? "ja" : "en",
         excludeContentIds,
       });
+      const items = result.items;
       runs++;
 
       for (const it of items) {
