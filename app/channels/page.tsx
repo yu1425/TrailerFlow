@@ -4,7 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ChannelSelector from "@/components/ChannelSelector";
+import { getChannelsForMode } from "@/lib/feed";
 import Wordmark from "@/components/Wordmark";
+
+const DATA_MODE =
+  process.env.NEXT_PUBLIC_DATA_MODE ??
+  process.env.DATA_MODE ??
+  "manual";
 
 const CHANNEL_STORAGE_KEY = "trailerflow.channel";
 
@@ -42,6 +48,7 @@ export default function ChannelsPage() {
           variant="grid"
           selected={selected}
           onSelect={handleSelect}
+          channels={getChannelsForMode(DATA_MODE)}
         />
       </div>
     </main>

@@ -7,6 +7,7 @@ import type { FeedTrailer as Trailer } from "@/types/trailer";
 export interface MovieInfoPanelProps {
   movie: FeedMovie | null;
   trailer: Trailer | null;
+  source?: "content" | "tmdb";
   open: boolean;
   onClose: () => void;
   onWatchlist: () => void;
@@ -51,12 +52,14 @@ const LANGUAGE_LABELS: Record<string, string> = {
 function PanelBody({
   movie,
   trailer,
+  source,
   onWatchlist,
   onLike,
   isWatchlisted,
 }: {
   movie: FeedMovie;
   trailer: Trailer | null;
+  source?: "content" | "tmdb";
   onWatchlist: () => void;
   onLike: () => void;
   isWatchlisted: boolean;
@@ -101,10 +104,19 @@ function PanelBody({
           </span>
         ) : null}
         {year ? <span className="text-white/50">{year}年</span> : null}
+        {source === "tmdb" ? (
+          <span className="rounded-full bg-blue-500/20 px-2.5 py-0.5 font-medium text-blue-400">
+            TMDb
+          </span>
+        ) : null}
       </div>
 
       <div>
         <h2 className="text-xl font-bold leading-snug">{movie.title}</h2>
+        {movie.originalTitle &&
+        movie.originalTitle !== movie.title ? (
+          <p className="mt-1 text-sm text-white/40">{movie.originalTitle}</p>
+        ) : null}
         {movie.shortCopy ? (
           <p className="mt-2 text-base font-medium leading-relaxed text-accent">
             {movie.shortCopy}
@@ -204,6 +216,7 @@ function PanelBody({
 export default function MovieInfoPanel({
   movie,
   trailer,
+  source,
   open,
   onClose,
   onWatchlist,
@@ -226,6 +239,7 @@ export default function MovieInfoPanel({
           <PanelBody
             movie={movie}
             trailer={trailer}
+            source={source}
             onWatchlist={onWatchlist}
             onLike={onLike}
             isWatchlisted={isWatchlisted}

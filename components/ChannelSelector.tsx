@@ -1,5 +1,6 @@
 "use client";
 
+import type { ChannelDefinition } from "@/lib/feed";
 import { VISIBLE_CHANNELS } from "@/lib/feed";
 
 export interface ChannelSelectorProps {
@@ -7,22 +8,20 @@ export interface ChannelSelectorProps {
   onSelect: (channelId: string) => void;
   /** When false, renders a compact horizontal scroller (used in the player). */
   variant?: "bar" | "grid";
+  /** Override the default channel list (e.g. for TMDb mode). */
+  channels?: ChannelDefinition[];
 }
 
-/**
- * Channel switcher. Defaults to a horizontally scrollable bar that fits over
- * the immersive player; a "grid" variant is used on the standalone /channels
- * page.
- */
 export default function ChannelSelector({
   selected,
   onSelect,
   variant = "bar",
+  channels = VISIBLE_CHANNELS,
 }: ChannelSelectorProps) {
   if (variant === "grid") {
     return (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {VISIBLE_CHANNELS.map((channel) => {
+        {channels.map((channel) => {
           const isActive = channel.id === selected;
           return (
             <button
@@ -49,7 +48,7 @@ export default function ChannelSelector({
 
   return (
     <div className="no-scrollbar touch-scroll flex gap-2 overflow-x-auto px-1 py-1">
-      {VISIBLE_CHANNELS.map((channel) => {
+      {channels.map((channel) => {
         const isActive = channel.id === selected;
         return (
           <button

@@ -22,7 +22,13 @@ import {
   getRecentlyWatched,
   pushRecentlyWatched,
 } from "@/lib/recentlyWatched";
+import { getChannelsForMode } from "@/lib/feed";
 import type { FeedItem, FeedResponse } from "@/types/trailer";
+
+const DATA_MODE =
+  process.env.NEXT_PUBLIC_DATA_MODE ??
+  process.env.DATA_MODE ??
+  "manual";
 
 const REFILL_THRESHOLD = 3;
 const DEFAULT_CHANNEL = "lobby";
@@ -432,9 +438,18 @@ export default function HomePage() {
 
       {/* Channel bar */}
       <div className="z-10 border-b border-lobby-border/40 px-3 py-2">
+        {DATA_MODE === "tmdb" ? (
+          <div className="mb-1 flex items-center gap-2 px-1 text-[11px] text-white/40">
+            <span className="rounded bg-blue-500/20 px-1.5 py-0.5 font-medium text-blue-400">
+              TMDb探索
+            </span>
+            <span>知らない映画に出会うための予告編フィード</span>
+          </div>
+        ) : null}
         <ChannelSelector
           selected={selectedChannel}
           onSelect={handleChannelChange}
+          channels={getChannelsForMode(DATA_MODE)}
         />
       </div>
 
@@ -540,6 +555,7 @@ export default function HomePage() {
         <MovieInfoPanel
           movie={currentItem?.movie ?? null}
           trailer={currentItem?.trailer ?? null}
+          source={currentItem?.source}
           open={isDetailsOpen}
           onClose={() => setIsDetailsOpen(false)}
           onWatchlist={handleWatchlist}

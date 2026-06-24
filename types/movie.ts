@@ -31,6 +31,8 @@ export interface FeedMovie {
   id: number;
   tmdbId: number;
   title: string;
+  /** Original title in its native language (TMDb). */
+  originalTitle?: string | null;
   overview: string | null;
   releaseDate: string | null;
   posterUrl: string | null;

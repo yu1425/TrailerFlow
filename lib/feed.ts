@@ -20,7 +20,9 @@ export interface ChannelConfig {
   /** Only items released on/after this many years ago. */
   recentYears?: number;
   /** Ordering bias. */
-  sort?: "balanced" | "popularity" | "release" | "random";
+  sort?: "balanced" | "popularity" | "release" | "random" | "vote_average";
+  /** Only items with release_date in the future. */
+  upcoming?: boolean;
 
   // --- Content mode (manual/mixed) filters. ---------------------------------
   // These match against content_tags (which includes both genres and tags from
@@ -139,11 +141,104 @@ export const CHANNELS: ChannelDefinition[] = [
   },
 ];
 
+/**
+ * TMDb exploration mode channels. Genre IDs from TMDb API.
+ * These only appear when DATA_MODE=tmdb.
+ */
+export const TMDB_CHANNELS: ChannelDefinition[] = [
+  {
+    id: "lobby",
+    name: "ロビー",
+    description: "TMDb全体からバランスよく",
+    config: { sort: "balanced" },
+    visible: true,
+  },
+  {
+    id: "tmdb-popular",
+    name: "人気",
+    description: "TMDb人気ランキング上位",
+    config: { sort: "popularity" },
+    visible: true,
+  },
+  {
+    id: "tmdb-now-playing",
+    name: "上映中",
+    description: "現在劇場公開中の作品",
+    config: { recentYears: 1, sort: "release" },
+    visible: true,
+  },
+  {
+    id: "tmdb-upcoming",
+    name: "近日公開",
+    description: "これから公開される作品",
+    config: { upcoming: true, sort: "release" },
+    visible: true,
+  },
+  {
+    id: "tmdb-top-rated",
+    name: "高評価",
+    description: "TMDb評価の高い名作",
+    config: { sort: "vote_average" },
+    visible: true,
+  },
+  {
+    id: "tmdb-action",
+    name: "アクション",
+    description: "アクション映画",
+    config: { genres: [28] },
+    visible: true,
+  },
+  {
+    id: "tmdb-sf",
+    name: "SF",
+    description: "サイエンスフィクション",
+    config: { genres: [878] },
+    visible: true,
+  },
+  {
+    id: "tmdb-horror",
+    name: "ホラー",
+    description: "ホラー・スリラー",
+    config: { genres: [27] },
+    visible: true,
+  },
+  {
+    id: "tmdb-romance",
+    name: "恋愛",
+    description: "ロマンス映画",
+    config: { genres: [10749] },
+    visible: true,
+  },
+  {
+    id: "tmdb-animation",
+    name: "アニメーション",
+    description: "アニメーション作品",
+    config: { genres: [16] },
+    visible: true,
+  },
+  {
+    id: "tmdb-random",
+    name: "ランダム発掘",
+    description: "知らない映画に出会う",
+    config: { sort: "random" },
+    visible: true,
+  },
+];
+
+/** All channel definitions (Manual + TMDb). Used by getChannel(). */
+const ALL_CHANNELS = [...CHANNELS, ...TMDB_CHANNELS];
+
 /** Channels visible in the public UI (player bar, /channels page). */
 export const VISIBLE_CHANNELS = CHANNELS.filter((c) => c.visible !== false);
 
+/** Returns the channel list appropriate for the given data mode. */
+export function getChannelsForMode(mode: string): ChannelDefinition[] {
+  if (mode === "tmdb") return TMDB_CHANNELS.filter((c) => c.visible !== false);
+  return CHANNELS.filter((c) => c.visible !== false);
+}
+
 export function getChannel(id: string | null | undefined): ChannelDefinition {
-  return CHANNELS.find((c) => c.id === id) ?? CHANNELS[0];
+  return ALL_CHANNELS.find((c) => c.id === id) ?? CHANNELS[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -223,11 +318,13 @@ interface MovieWithRelations {
   id: number;
   tmdb_id: number;
   title: string;
+  original_title: string | null;
   overview: string | null;
   release_date: string | null;
   poster_path: string | null;
   backdrop_path: string | null;
   popularity: number | null;
+  vote_average: number | null;
   original_language: string | null;
   adult: boolean | null;
   trailers: TrailerRow[];
@@ -235,8 +332,8 @@ interface MovieWithRelations {
 }
 
 const MOVIE_SELECT = `
-  id, tmdb_id, title, overview, release_date, poster_path, backdrop_path,
-  popularity, original_language, adult,
+  id, tmdb_id, title, original_title, overview, release_date, poster_path, backdrop_path,
+  popularity, vote_average, original_language, adult,
   trailers!inner ( id, movie_id, site, video_key, name, type, official, published_at, language, country, is_active, created_at ),
   movie_genres ( genres ( id, name ) )
 `;
@@ -305,9 +402,11 @@ async function fetchPool(
       cutoff.setFullYear(cutoff.getFullYear() - channelConfig.recentYears);
       query = query.gte("release_date", cutoff.toISOString().slice(0, 10));
     }
+    if (channelConfig.upcoming) {
+      const today = new Date().toISOString().slice(0, 10);
+      query = query.gte("release_date", today);
+    }
     if (channelConfig.genres && channelConfig.genres.length > 0) {
-      // Resolve matching movie ids via the join table so we can keep full
-      // genre lists in the display payload.
       const { data: mg } = await supabase
         .from("movie_genres")
         .select("movie_id")
@@ -319,10 +418,10 @@ async function fetchPool(
     }
   }
 
-  // Order the candidate pool. We always pull by popularity (or release for the
-  // "new"/"release" sort) then re-rank/shuffle in memory.
   if (channelConfig.sort === "release") {
     query = query.order("release_date", { ascending: false, nullsFirst: false });
+  } else if (channelConfig.sort === "vote_average") {
+    query = query.order("vote_average", { ascending: false, nullsFirst: false });
   } else {
     query = query.order("popularity", { ascending: false, nullsFirst: false });
   }
@@ -396,6 +495,7 @@ function toFeedItem(
       id: movie.id,
       tmdbId: movie.tmdb_id,
       title: movie.title,
+      originalTitle: movie.original_title,
       overview: movie.overview,
       releaseDate: movie.release_date,
       posterUrl: getImageUrl(movie.poster_path, "w500"),
