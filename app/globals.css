@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Cinema lobby theme. Override these to re-skin the whole app. */
+  --lobby-bg: #0a0a0b;
+  --lobby-surface: #15151a;
+  --lobby-border: #2a2a31;
+
+  --accent: #f5a623; /* amber marquee */
+  --accent-soft: rgba(245, 166, 35, 0.15);
+  --accent-contrast: #0a0a0b;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--lobby-bg);
+  color: #f5f5f7;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Hide scrollbars on the immersive surfaces but keep scrollability. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Smooth, momentum-based horizontal scrolling for mobile (channel bar etc.). */
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+}
+.touch-scroll > * {
+  scroll-snap-align: start;
+}
+
+/* Respect the iOS home indicator / Safari bottom bar. */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
