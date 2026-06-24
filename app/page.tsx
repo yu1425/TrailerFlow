@@ -27,7 +27,6 @@ import type { FeedItem, FeedResponse } from "@/types/trailer";
 const REFILL_THRESHOLD = 3;
 const DEFAULT_CHANNEL = "lobby";
 const CHANNEL_STORAGE_KEY = "trailerflow.channel";
-const LANGUAGE_STORAGE_KEY = "trailerflow.preferredLanguage";
 const TRANSITION_SAFETY_MS = 2500;
 // If the initial feed fetch hasn't resolved by this point we surface the retry
 // CTA instead of leaving the visitor on the lobby spinner forever. Real fetches
@@ -35,8 +34,6 @@ const TRANSITION_SAFETY_MS = 2500;
 const FEED_FETCH_TIMEOUT_MS = 15000;
 
 const DEBUG_ENABLED = process.env.NEXT_PUBLIC_DEBUG_PANEL === "true";
-
-type PreferredLanguage = "ja" | "en";
 
 function readStored(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -60,8 +57,6 @@ export default function HomePage() {
   const [queue, setQueue] = useState<FeedItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedChannel, setSelectedChannel] = useState(DEFAULT_CHANNEL);
-  const [preferredLanguage, setPreferredLanguage] =
-    useState<PreferredLanguage>("ja");
   const [hasStarted, setHasStarted] = useState(false);
   // Start muted so the YouTube IFrame autoplay policy lets the first trailer
   // roll immediately after the StartOverlay click. Visitors can flip the
@@ -102,7 +97,6 @@ export default function HomePage() {
     async (
       userId: string,
       channel: string,
-      language: PreferredLanguage,
     ): Promise<FeedItem[]> => {
       const exclude = Array.from(
         new Set([...getRecentlyWatched(), ...sessionSeenRef.current]),
@@ -111,7 +105,7 @@ export default function HomePage() {
         anonymousUserId: userId,
         channel,
         limit: "10",
-        preferredLanguage: language,
+        preferredLanguage: "ja",
       });
       if (exclude.length > 0) {
         params.set("recentlyWatchedMovieIds", exclude.join(","));
@@ -140,11 +134,11 @@ export default function HomePage() {
 
   // Initial / retryable load.
   const runInitialLoad = useCallback(
-    async (userId: string, channel: string, language: PreferredLanguage) => {
+    async (userId: string, channel: string) => {
       setIsLoading(true);
       setLoadError(false);
       try {
-        const items = await fetchFeed(userId, channel, language);
+        const items = await fetchFeed(userId, channel);
         rememberQueued(items);
         setQueue(items);
         setCurrentIndex(0);
@@ -164,11 +158,7 @@ export default function HomePage() {
     setAnonymousUserId(userId);
 
     const initialChannel = readStored(CHANNEL_STORAGE_KEY, DEFAULT_CHANNEL);
-    const initialLang = (
-      readStored(LANGUAGE_STORAGE_KEY, "ja") === "en" ? "en" : "ja"
-    ) as PreferredLanguage;
     setSelectedChannel(initialChannel);
-    setPreferredLanguage(initialLang);
 
     // Watchlist state (best-effort, non-blocking).
     fetch(`/api/watchlist?anonymousUserId=${encodeURIComponent(userId)}`, {
@@ -184,7 +174,7 @@ export default function HomePage() {
     // faster the moment the visitor dismisses the StartOverlay.
     loadYouTubeApi().catch(() => undefined);
 
-    void runInitialLoad(userId, initialChannel, initialLang);
+    void runInitialLoad(userId, initialChannel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -199,7 +189,6 @@ export default function HomePage() {
       const more = await fetchFeed(
         anonymousUserId,
         selectedChannel,
-        preferredLanguage,
       );
       setQueue((prev) => {
         const seen = new Set(prev.map((i) => i.movie.id));
@@ -217,7 +206,6 @@ export default function HomePage() {
     currentIndex,
     queue.length,
     selectedChannel,
-    preferredLanguage,
     isFetchingMore,
     fetchFeed,
     rememberQueued,
@@ -345,6 +333,9 @@ export default function HomePage() {
       if (channelId === selectedChannel || !anonymousUserId) return;
       setSelectedChannel(channelId);
       persist(CHANNEL_STORAGE_KEY, channelId);
+      // Clear the session-seen set on channel change so the new channel's pool
+      // isn't artificially reduced by items the old channel showed.
+      sessionSeenRef.current.clear();
       void trackEvent({
         anonymousUserId,
         movieId: currentItem?.movie.id ?? 0,
@@ -352,19 +343,9 @@ export default function HomePage() {
         eventType: "channel_change",
         channel: channelId,
       });
-      await runInitialLoad(anonymousUserId, channelId, preferredLanguage);
+      await runInitialLoad(anonymousUserId, channelId);
     },
-    [selectedChannel, anonymousUserId, currentItem, preferredLanguage, runInitialLoad],
-  );
-
-  const handleLanguageChange = useCallback(
-    async (language: PreferredLanguage) => {
-      if (language === preferredLanguage || !anonymousUserId) return;
-      setPreferredLanguage(language);
-      persist(LANGUAGE_STORAGE_KEY, language);
-      await runInitialLoad(anonymousUserId, selectedChannel, language);
-    },
-    [preferredLanguage, anonymousUserId, selectedChannel, runInitialLoad],
+    [selectedChannel, anonymousUserId, currentItem, runInitialLoad],
   );
 
   // --- Keyboard shortcuts --------------------------------------------------
@@ -449,31 +430,12 @@ export default function HomePage() {
         </nav>
       </header>
 
-      {/* Channel + language bar */}
-      <div className="z-10 flex items-center gap-3 border-b border-lobby-border/40 px-3 py-2">
-        <div className="min-w-0 flex-1">
-          <ChannelSelector
-            selected={selectedChannel}
-            onSelect={handleChannelChange}
-          />
-        </div>
-        <div className="flex shrink-0 overflow-hidden rounded-full border border-lobby-border text-xs">
-          {(["ja", "en"] as PreferredLanguage[]).map((lang) => (
-            <button
-              key={lang}
-              type="button"
-              onClick={() => handleLanguageChange(lang)}
-              className={[
-                "px-3 py-1.5 font-medium transition",
-                preferredLanguage === lang
-                  ? "bg-accent text-accent-contrast"
-                  : "text-white/60 hover:text-white",
-              ].join(" ")}
-            >
-              {lang === "ja" ? "日本語" : "English"}
-            </button>
-          ))}
-        </div>
+      {/* Channel bar */}
+      <div className="z-10 border-b border-lobby-border/40 px-3 py-2">
+        <ChannelSelector
+          selected={selectedChannel}
+          onSelect={handleChannelChange}
+        />
       </div>
 
       {/* Player + details */}
@@ -531,7 +493,6 @@ export default function HomePage() {
                           void runInitialLoad(
                             anonymousUserId,
                             selectedChannel,
-                            preferredLanguage,
                           );
                         }
                       }}
@@ -589,7 +550,7 @@ export default function HomePage() {
       </div>
 
       {/* Loading / error gate — skip the full-screen overlay once playback
-          has started so channel/language switches don't blank the screen. */}
+          has started so channel switches don't blank the screen. */}
       {loadError && !hasStarted ? (
         <LobbyLoading
           error
@@ -598,7 +559,6 @@ export default function HomePage() {
               void runInitialLoad(
                 anonymousUserId,
                 selectedChannel,
-                preferredLanguage,
               );
             }
           }}

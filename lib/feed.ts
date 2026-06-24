@@ -13,14 +13,25 @@ import { getImageUrl } from "@/lib/tmdb";
 // ---------------------------------------------------------------------------
 
 export interface ChannelConfig {
-  /** Restrict to these TMDb genre ids. */
+  /** Restrict to these TMDb genre ids (used only in TMDb mode). */
   genres?: number[];
   /** Restrict to this original language (ISO 639-1), e.g. "ja". */
   language?: string;
-  /** Only movies released on/after this many years ago. */
+  /** Only items released on/after this many years ago. */
   recentYears?: number;
   /** Ordering bias. */
   sort?: "balanced" | "popularity" | "release" | "random";
+
+  // --- Content mode (manual/mixed) filters. ---------------------------------
+  // These match against content_tags (which includes both genres and tags from
+  // the CSV) and the contents.content_type column.
+
+  /** Match items that have ANY of these strings in content_tags. */
+  contentTags?: string[];
+  /** Match items whose content_type is one of these values. */
+  contentTypes?: string[];
+  /** Match items whose country column is one of these values. */
+  contentCountries?: string[];
 }
 
 export interface ChannelDefinition {
@@ -31,19 +42,89 @@ export interface ChannelDefinition {
 }
 
 /**
- * Default channels. Mirrors the seed in supabase/schema.sql so the app works
- * even before the DB seed has run.
+ * Channel definitions. Each channel's `config` drives both the TMDb feed
+ * (via `genres`/`language`) and the curated content feed (via `contentTags`/
+ * `contentTypes`/`contentCountries`). The content filters match against
+ * content_tags rows, which contain both genres and freeform tags from the CSV.
  */
 export const CHANNELS: ChannelDefinition[] = [
-  { id: "lobby", name: "ロビー", description: "いま注目の予告編をバランスよく", config: { sort: "balanced" } },
-  { id: "new", name: "新作予告", description: "これから公開される最新の予告編", config: { recentYears: 1, sort: "release" } },
-  { id: "popular", name: "人気", description: "話題作の予告編を中心に", config: { sort: "popularity" } },
-  { id: "japanese", name: "日本映画", description: "日本語作品の予告編", config: { language: "ja" } },
-  { id: "action", name: "アクション", description: "アクション映画の予告編", config: { genres: [28] } },
-  { id: "romance", name: "恋愛", description: "ロマンス映画の予告編", config: { genres: [10749] } },
-  { id: "horror", name: "ホラー", description: "ホラー映画の予告編", config: { genres: [27] } },
-  { id: "animation", name: "アニメ", description: "アニメーション作品の予告編", config: { genres: [16] } },
-  { id: "random", name: "ランダム", description: "気分を変えてランダムに", config: { sort: "random" } },
+  {
+    id: "lobby",
+    name: "ロビー",
+    description: "いま注目の予告編をバランスよく",
+    config: { sort: "balanced" },
+  },
+  {
+    id: "new",
+    name: "新作予告",
+    description: "これから公開される最新の予告編",
+    config: {
+      recentYears: 2,
+      sort: "release",
+      contentTags: ["新作", "2020年代", "話題作"],
+    },
+  },
+  {
+    id: "popular",
+    name: "人気",
+    description: "話題作の予告編を中心に",
+    config: { sort: "popularity", contentTags: ["話題作", "名作", "アカデミー賞", "カンヌ"] },
+  },
+  {
+    id: "japanese",
+    name: "日本映画",
+    description: "邦画・日本語作品の予告編",
+    config: {
+      language: "ja",
+      contentTags: ["邦画", "日本映画"],
+      contentCountries: ["JP"],
+    },
+  },
+  {
+    id: "action",
+    name: "アクション",
+    description: "アクション・SF映画の予告編",
+    config: {
+      genres: [28],
+      contentTags: ["アクション", "SF", "アクションアドベンチャー", "アクションRPG", "スパイ", "特撮", "スタント", "カーアクション"],
+    },
+  },
+  {
+    id: "romance",
+    name: "恋愛",
+    description: "恋愛・青春作品の予告編",
+    config: {
+      genres: [10749],
+      contentTags: ["ロマンス", "ラブストーリー", "恋愛", "青春", "初恋"],
+    },
+  },
+  {
+    id: "horror",
+    name: "ホラー",
+    description: "ホラー・サスペンス作品の予告編",
+    config: {
+      genres: [27],
+      contentTags: ["ホラー", "サスペンス", "ゾンビ", "狂気", "ゴシック", "R指定"],
+    },
+  },
+  {
+    id: "animation",
+    name: "アニメ",
+    description: "アニメーション作品の予告編",
+    config: { genres: [16], contentTypes: ["anime"] },
+  },
+  {
+    id: "game",
+    name: "ゲーム",
+    description: "ゲーム作品の予告編",
+    config: { contentTypes: ["game"] },
+  },
+  {
+    id: "random",
+    name: "ランダム",
+    description: "気分を変えてランダムに",
+    config: { sort: "random" },
+  },
 ];
 
 export function getChannel(id: string | null | undefined): ChannelDefinition {

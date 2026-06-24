@@ -130,6 +130,8 @@ interface RankedEntry {
   c: ContentWithRelations;
   item: FeedItem;
   quality: number;
+  /** True when the item came from the strict (channel-filtered) pass. */
+  strictMatch: boolean;
 }
 
 /**
@@ -141,20 +143,17 @@ interface RankedEntry {
  */
 function arrangeForDiversity(entries: RankedEntry[], limit: number): FeedItem[] {
   const OPENERS = 3;
-  // Jitter range for the opening slots. Small enough that only genuinely
-  // high-quality trailers can lead (a q74 + 6 still loses to a q84), but large
-  // enough that the top band reshuffles — so a first-time visitor doesn't see
-  // the exact same three openers every single visit.
   const OPENER_JITTER = 6;
-  const remaining = [...entries];
-  const out: RankedEntry[] = [];
 
-  // Stable per-entry opener score (quality + one-time jitter), so the opener
-  // ordering is consistent within a single build but varies across builds.
+  const strictEntries = entries.filter((e) => e.strictMatch);
+  const fillerEntries = entries.filter((e) => !e.strictMatch);
+
   const openerScore = new Map<RankedEntry, number>();
   for (const e of entries) {
     openerScore.set(e, e.quality + Math.random() * OPENER_JITTER);
   }
+
+  const out: RankedEntry[] = [];
 
   const primaryTag = (e: RankedEntry): string | null =>
     e.c.content_tags[0]?.tag ?? null;
@@ -174,9 +173,7 @@ function arrangeForDiversity(entries: RankedEntry[], limit: number): FeedItem[] 
     return prev.c.content_tags.some((t) => t.tag === tag);
   };
 
-  while (out.length < limit && remaining.length > 0) {
-    // For the opening slots, prefer high-quality candidates (with a touch of
-    // jitter so the strong openers rotate between visits).
+  const pickFrom = (remaining: RankedEntry[]): number | undefined => {
     const order =
       out.length < OPENERS
         ? remaining
@@ -192,13 +189,28 @@ function arrangeForDiversity(entries: RankedEntry[], limit: number): FeedItem[] 
       (i) => !wouldTripleType(remaining[i]) && !repeatsTag(remaining[i]),
     );
     if (pick === undefined) {
-      // Relax the tag rule first, keep the content_type spacing.
       pick = order.find((i) => !wouldTripleType(remaining[i]));
     }
     if (pick === undefined) pick = order[0];
+    return pick;
+  };
 
-    out.push(remaining[pick]);
-    remaining.splice(pick, 1);
+  // Phase 1: place all strict-match items first, with diversity rules.
+  const remainingStrict = [...strictEntries];
+  while (out.length < limit && remainingStrict.length > 0) {
+    const pick = pickFrom(remainingStrict);
+    if (pick === undefined) break;
+    out.push(remainingStrict[pick]);
+    remainingStrict.splice(pick, 1);
+  }
+
+  // Phase 2: fill remaining slots with filler items.
+  const remainingFiller = [...fillerEntries];
+  while (out.length < limit && remainingFiller.length > 0) {
+    const pick = pickFrom(remainingFiller);
+    if (pick === undefined) break;
+    out.push(remainingFiller[pick]);
+    remainingFiller.splice(pick, 1);
   }
 
   return out.map((e) => e.item);
@@ -222,24 +234,57 @@ async function fetchContentPool(
   }
 
   if (!relaxed) {
-    if (channelConfig.language) {
-      query = query.eq("language", channelConfig.language);
-    }
+    // Year filter (e.g. "新作予告" channel).
     if (channelConfig.recentYears) {
       const cutoff = new Date();
       cutoff.setFullYear(cutoff.getFullYear() - channelConfig.recentYears);
       query = query.gte("release_date", cutoff.toISOString().slice(0, 10));
     }
-    if (channelConfig.genres && channelConfig.genres.length > 0) {
-      // For curated content, match via content_tags (genre names as tags)
-      const { data: tagMatches } = await supabase
-        .from("content_tags")
-        .select("content_id")
-        .in("tag", channelConfig.genres.map(String))
-        .limit(1000);
-      const ids = Array.from(new Set((tagMatches ?? []).map((r) => r.content_id)));
-      if (ids.length === 0) return [];
-      query = query.in("id", ids);
+
+    // content_type filter (e.g. "アニメ" → anime, "ゲーム" → game).
+    if (channelConfig.contentTypes && channelConfig.contentTypes.length > 0) {
+      query = query.in("content_type", channelConfig.contentTypes);
+    }
+
+    // country filter (e.g. "日本映画" → JP).
+    if (channelConfig.contentCountries && channelConfig.contentCountries.length > 0) {
+      query = query.in("country", channelConfig.contentCountries);
+    }
+
+    // Tag-based filter: find content ids that have ANY of the specified tags,
+    // then restrict the main query to those ids. This replaces the old
+    // genre-id-based filter that never matched curated content.
+    const hasTagFilter =
+      channelConfig.contentTags && channelConfig.contentTags.length > 0;
+    // For "japanese" channel: also accept language-level match as an OR path,
+    // since some JP content may lack the explicit "邦画" tag.
+    const hasLanguageFilter = !!channelConfig.language;
+
+    if (hasTagFilter || hasLanguageFilter) {
+      const candidateIds = new Set<number>();
+
+      if (hasTagFilter) {
+        const { data: tagMatches } = await supabase
+          .from("content_tags")
+          .select("content_id")
+          .in("tag", channelConfig.contentTags!)
+          .limit(1000);
+        for (const r of tagMatches ?? []) candidateIds.add(r.content_id as number);
+      }
+
+      if (hasLanguageFilter) {
+        const { data: langMatches } = await supabase
+          .from("contents")
+          .select("id")
+          .eq("language", channelConfig.language!)
+          .eq("curation_status", "approved")
+          .eq("is_active", true)
+          .limit(1000);
+        for (const r of langMatches ?? []) candidateIds.add(r.id as number);
+      }
+
+      if (candidateIds.size === 0) return [];
+      query = query.in("id", Array.from(candidateIds));
     }
   }
 
@@ -268,7 +313,7 @@ export async function buildContentFeed(
   const seen = new Set<number>();
   const ranked: RankedEntry[] = [];
 
-  const rankAndCollect = (pool: ContentWithRelations[]) => {
+  const rankAndCollect = (pool: ContentWithRelations[], strict: boolean) => {
     const scored = pool
       .map((c) => ({ c, score: scoreContent(c, config, excludeSet) }))
       .sort((a, b) => b.score - a.score);
@@ -277,20 +322,20 @@ export async function buildContentFeed(
       const item = contentToFeedItem(c, langPriority);
       if (!item) continue;
       seen.add(c.id);
-      ranked.push({ c, item, quality: c.quality_score ?? 50 });
+      ranked.push({ c, item, quality: c.quality_score ?? 50, strictMatch: strict });
     }
   };
 
   // Pass 1: strict channel filters + recently-watched exclusion.
   let pool = await fetchContentPool(supabase, config, false, excludeIds);
   if (config.sort === "random") pool = shuffle(pool);
-  rankAndCollect(pool);
+  rankAndCollect(pool, true);
 
   // Pass 2: relax channel filters if the strict pass is thin.
   if (ranked.length < limit) {
     for (const id of excludeIds) seen.add(id);
     const relaxedPool = await fetchContentPool(supabase, config, true);
-    rankAndCollect(shuffle(relaxedPool));
+    rankAndCollect(shuffle(relaxedPool), false);
   }
 
   // Pass 3: last resort — allow recently-watched content back in rather than
@@ -299,7 +344,7 @@ export async function buildContentFeed(
   if (ranked.length === 0) {
     seen.clear();
     const relaxedPool = await fetchContentPool(supabase, config, true);
-    rankAndCollect(shuffle(relaxedPool));
+    rankAndCollect(shuffle(relaxedPool), false);
   }
 
   return arrangeForDiversity(ranked, limit);
