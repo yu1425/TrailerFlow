@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:manual": "DATA_MODE=manual NEXT_PUBLIC_DATA_MODE=manual next dev",
+    "dev:tmdb": "DATA_MODE=tmdb NEXT_PUBLIC_DATA_MODE=tmdb next dev",
+    "dev:mixed": "DATA_MODE=mixed NEXT_PUBLIC_DATA_MODE=mixed next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
