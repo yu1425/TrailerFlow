@@ -33,6 +33,9 @@ const DATA_MODE =
 const REFILL_THRESHOLD = 3;
 const DEFAULT_CHANNEL = "lobby";
 const CHANNEL_STORAGE_KEY = "trailerflow.channel";
+const LONG_TRAILER_KEYS_STORAGE_KEY = "trailerflow.tmdb.longTrailerKeys";
+const LONG_TRAILER_SECONDS = 4 * 60 + 30;
+const MAX_LONG_TRAILER_KEYS = 200;
 const TRANSITION_SAFETY_MS = 2500;
 // If the initial feed fetch hasn't resolved by this point we surface the retry
 // CTA instead of leaving the visitor on the lobby spinner forever. Real fetches
@@ -58,6 +61,24 @@ function persist(key: string, value: string) {
   }
 }
 
+function readStoredJsonArray(key: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
 export default function HomePage() {
   const [anonymousUserId, setAnonymousUserId] = useState<string | null>(null);
   const [queue, setQueue] = useState<FeedItem[]>([]);
@@ -74,6 +95,11 @@ export default function HomePage() {
   const [loadError, setLoadError] = useState(false);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [currentDurationSeconds, setCurrentDurationSeconds] =
+    useState<number | null>(null);
+  const [longTrailerKeys, setLongTrailerKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const shortcuts = useShortcutsHelp();
 
@@ -116,6 +142,12 @@ export default function HomePage() {
       if (exclude.length > 0) {
         params.set("recentlyWatchedMovieIds", exclude.join(","));
       }
+      if (DATA_MODE === "tmdb" && longTrailerKeys.size > 0) {
+        params.set(
+          "deprioritizedVideoKeys",
+          Array.from(longTrailerKeys).slice(0, MAX_LONG_TRAILER_KEYS).join(","),
+        );
+      }
       // Abort if the network hangs so the LobbyLoading screen never gets
       // stuck on the rotating "予告編を準備しています…" message.
       const controller = new AbortController();
@@ -135,7 +167,7 @@ export default function HomePage() {
         clearTimeout(timeout);
       }
     },
-    [],
+    [longTrailerKeys],
   );
 
   // Initial / retryable load.
@@ -165,6 +197,9 @@ export default function HomePage() {
 
     const initialChannel = readStored(CHANNEL_STORAGE_KEY, DEFAULT_CHANNEL);
     setSelectedChannel(initialChannel);
+    setLongTrailerKeys(
+      new Set(readStoredJsonArray(LONG_TRAILER_KEYS_STORAGE_KEY)),
+    );
 
     // Watchlist state (best-effort, non-blocking).
     fetch(`/api/watchlist?anonymousUserId=${encodeURIComponent(userId)}`, {
@@ -221,6 +256,10 @@ export default function HomePage() {
     if (hasStarted) void maybeRefill();
   }, [currentIndex, hasStarted, maybeRefill]);
 
+  useEffect(() => {
+    setCurrentDurationSeconds(null);
+  }, [currentItem?.trailer.id]);
+
   // Safety net: never let the "next up" overlay stick if onPlay never fires.
   useEffect(() => {
     if (!isTransitioning) return;
@@ -232,6 +271,7 @@ export default function HomePage() {
 
   const advance = useCallback(() => {
     setIsDetailsOpen(false);
+    setCurrentDurationSeconds(null);
     setIsTransitioning(true);
     setCurrentIndex((i) => Math.min(i + 1, queue.length));
   }, [queue.length]);
@@ -293,6 +333,36 @@ export default function HomePage() {
     setIsTransitioning(false);
     emit("play_start");
   }, [emit]);
+
+  const handleDuration = useCallback(
+    (seconds: number) => {
+      setCurrentDurationSeconds(seconds);
+      if (
+        DATA_MODE !== "tmdb" ||
+        !currentItem ||
+        currentItem.source !== "tmdb" ||
+        seconds < LONG_TRAILER_SECONDS
+      ) {
+        return;
+      }
+
+      setLongTrailerKeys((prev) => {
+        if (prev.has(currentItem.trailer.videoKey)) return prev;
+        const next = new Set([currentItem.trailer.videoKey, ...prev]);
+        const compact = Array.from(next).slice(0, MAX_LONG_TRAILER_KEYS);
+        try {
+          window.localStorage.setItem(
+            LONG_TRAILER_KEYS_STORAGE_KEY,
+            JSON.stringify(compact),
+          );
+        } catch {
+          // ignore storage failures; the UI label still works this session
+        }
+        return new Set(compact);
+      });
+    },
+    [currentItem],
+  );
 
   const handleError = useCallback(() => {
     advance();
@@ -406,6 +476,11 @@ export default function HomePage() {
   const isWatchlisted = currentItem
     ? watchlistedIds.has(currentItem.movie.id)
     : false;
+  const isLongTmdbTrailer =
+    DATA_MODE === "tmdb" &&
+    currentItem?.source === "tmdb" &&
+    currentDurationSeconds !== null &&
+    currentDurationSeconds >= LONG_TRAILER_SECONDS;
 
   const averageWatchSeconds =
     stats.watchSamples > 0 ? stats.watchSecondsTotal / stats.watchSamples : 0;
@@ -445,6 +520,13 @@ export default function HomePage() {
             </span>
             <span>知らない映画に出会うための予告編フィード</span>
           </div>
+        ) : DATA_MODE === "firehose" ? (
+          <div className="mb-1 flex items-center gap-2 px-1 text-[11px] text-white/40">
+            <span className="rounded bg-orange-500/20 px-1.5 py-0.5 font-medium text-orange-300">
+              Firehose
+            </span>
+            <span>増え続ける予告編棚から、当たり外れごと浴びるモード</span>
+          </div>
         ) : null}
         <ChannelSelector
           selected={selectedChannel}
@@ -465,6 +547,7 @@ export default function HomePage() {
                   autoplay
                   muted={muted}
                   onPlay={handlePlay}
+                  onDuration={handleDuration}
                   onEnded={handleEnded}
                   onError={handleError}
                   onStats={(handle) => {
@@ -475,6 +558,11 @@ export default function HomePage() {
                   visible={isTransitioning}
                   title={currentItem.movie.title}
                 />
+                {isLongTmdbTrailer ? (
+                  <div className="pointer-events-none absolute left-4 top-4 z-20 rounded bg-black/70 px-3 py-1.5 text-xs font-bold text-white shadow-lg ring-1 ring-white/15">
+                    長めの予告 {formatDuration(currentDurationSeconds)}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="flex h-full items-center justify-center px-6 text-center">

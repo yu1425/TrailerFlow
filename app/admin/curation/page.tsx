@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import Wordmark from "@/components/Wordmark";
 import type {
+  ContentType,
   CurationListItem,
   CurationStatus,
   CurationUpdateInput,
@@ -41,6 +42,63 @@ type StatusCounts = Record<string, number>;
 
 const ADMIN_SECRET_KEY = "trailerflow.adminSecret";
 
+const CONTENT_TYPE_OPTIONS: { value: ContentType; label: string }[] = [
+  { value: "movie", label: "movie" },
+  { value: "anime", label: "anime" },
+  { value: "game", label: "game" },
+  { value: "tv", label: "tv" },
+  { value: "travel", label: "travel" },
+  { value: "restaurant", label: "restaurant" },
+];
+
+interface YouTubeCandidateFormState {
+  youtubeUrlOrKey: string;
+  title: string;
+  contentType: ContentType;
+  trailerType: string;
+  sourceUrl: string;
+  curatorNote: string;
+}
+
+interface YouTubeCandidateResult {
+  kind: "success" | "duplicate" | "error";
+  message: string;
+  adminUrl?: string;
+  title?: string | null;
+  youtubeVideoKey?: string;
+  durationSeconds?: number | null;
+}
+
+function formatSeconds(seconds: number | null): string {
+  if (seconds == null) return "unknown";
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatDurationBucket(seconds: number | null): string {
+  if (seconds == null) return "unknown";
+  if (seconds < 45) return "short";
+  if (seconds < 210) return "ideal";
+  if (seconds < 270) return "long";
+  return "very_long";
+}
+
+function getApprovalWarnings(item: CurationListItem): string[] {
+  const warnings: string[] = [];
+  if (!item.shortCopy) warnings.push("short_copy");
+  if (item.tags.length === 0) warnings.push("tags");
+  if (typeof item.qualityScore !== "number") warnings.push("quality_score");
+  if (!item.trailerType) warnings.push("trailer_type");
+  if (!item.officialLevel || item.officialLevel === "unknown") {
+    warnings.push("official_level");
+  }
+  if (!item.embedStatus || item.embedStatus === "unknown") {
+    warnings.push("embed_status");
+  }
+  return warnings;
+}
+
 export default function CurationPage() {
   const [items, setItems] = useState<CurationListItem[]>([]);
   const [counts, setCounts] = useState<StatusCounts>({});
@@ -53,12 +111,31 @@ export default function CurationPage() {
   // token so the protected API can be used from the (unauthenticated) UI page.
   const [adminSecret, setAdminSecret] = useState<string>("");
   const [needsSecret, setNeedsSecret] = useState(false);
+  const [youtubeForm, setYoutubeForm] = useState<YouTubeCandidateFormState>({
+    youtubeUrlOrKey: "",
+    title: "",
+    contentType: "movie",
+    trailerType: "Trailer",
+    sourceUrl: "",
+    curatorNote: "",
+  });
+  const [youtubeResult, setYoutubeResult] =
+    useState<YouTubeCandidateResult | null>(null);
+  const [addingYoutube, setAddingYoutube] = useState(false);
 
   useEffect(() => {
     try {
       setAdminSecret(localStorage.getItem(ADMIN_SECRET_KEY) ?? "");
     } catch {
       // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status") as CurationStatus | "all" | null;
+    if (status && STATUS_TABS.some((tab) => tab.value === status)) {
+      setActiveTab(status);
     }
   }, []);
 
@@ -188,6 +265,85 @@ export default function CurationPage() {
     }
   };
 
+  const handleYouTubeCandidateSubmit = async () => {
+    if (!youtubeForm.youtubeUrlOrKey.trim()) {
+      setYoutubeResult({
+        kind: "error",
+        message: "YouTube URL または video key を入力してください",
+      });
+      return;
+    }
+
+    setAddingYoutube(true);
+    setYoutubeResult(null);
+    try {
+      const res = await fetch("/api/admin/curation/youtube-candidate", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          youtube_url_or_key: youtubeForm.youtubeUrlOrKey,
+          title: youtubeForm.title || undefined,
+          content_type: youtubeForm.contentType,
+          trailer_type: youtubeForm.trailerType || undefined,
+          source_url: youtubeForm.sourceUrl || undefined,
+          curator_note: youtubeForm.curatorNote || undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        message?: string;
+        duplicate?: boolean;
+        adminUrl?: string;
+        title?: string | null;
+        youtubeVideoKey?: string;
+        durationSeconds?: number | null;
+      };
+
+      if (res.status === 401) {
+        setNeedsSecret(true);
+        throw new Error("ADMIN_SECRET が必要です");
+      }
+      if (!res.ok) throw new Error(data.error ?? `${res.status}`);
+
+      const kind = data.duplicate ? "duplicate" : "success";
+      setYoutubeResult({
+        kind,
+        message:
+          data.message ??
+          (data.duplicate
+            ? "このYouTube動画は既に登録済みです"
+            : "候補として保存しました"),
+        adminUrl: data.adminUrl,
+        title: data.title,
+        youtubeVideoKey: data.youtubeVideoKey,
+        durationSeconds: data.durationSeconds,
+      });
+
+      if (!data.duplicate) {
+        setYoutubeForm((prev) => ({
+          ...prev,
+          youtubeUrlOrKey: "",
+          title: "",
+          sourceUrl: "",
+          curatorNote: "",
+        }));
+        setActiveTab("candidate");
+        await fetchList("candidate");
+      }
+    } catch (err) {
+      console.error("Failed to add YouTube candidate", err);
+      setYoutubeResult({
+        kind: "error",
+        message:
+          err instanceof Error
+            ? err.message
+            : "候補の作成に失敗しました",
+      });
+    } finally {
+      setAddingYoutube(false);
+    }
+  };
+
   return (
     <main className="mx-auto min-h-[100dvh] w-full max-w-6xl px-5 py-6">
       <header className="mb-6 flex items-center justify-between">
@@ -197,9 +353,14 @@ export default function CurationPage() {
             Admin
           </span>
         </div>
-        <Link href="/" className="text-sm text-white/60 hover:text-white">
-          ← 再生に戻る
-        </Link>
+        <nav className="flex items-center gap-4 text-sm text-white/60">
+          <Link href="/admin/discovery" className="hover:text-white">
+            Discovery
+          </Link>
+          <Link href="/" className="hover:text-white">
+            再生に戻る
+          </Link>
+        </nav>
       </header>
 
       <h1 className="text-2xl font-bold">キュレーション管理</h1>
@@ -240,6 +401,160 @@ export default function CurationPage() {
           </div>
         </form>
       ) : null}
+
+      <section className="mt-6 rounded-2xl border border-lobby-border bg-lobby-surface/70 p-5">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-bold">YouTube URLから候補追加</h2>
+            <p className="mt-1 text-xs text-white/50">
+              watch / youtu.be / embed / shorts / video key に対応。公式性はここでは断定せず candidate として保存します。
+            </p>
+          </div>
+          <span className="rounded bg-blue-500/20 px-2 py-1 text-[11px] font-bold text-blue-300">
+            curation_status: candidate
+          </span>
+        </div>
+
+        <form
+          className="mt-4 grid gap-3 lg:grid-cols-12"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleYouTubeCandidateSubmit();
+          }}
+        >
+          <label className="block text-xs text-white/50 lg:col-span-7">
+            YouTube URL / video key
+            <input
+              type="text"
+              value={youtubeForm.youtubeUrlOrKey}
+              onChange={(e) =>
+                setYoutubeForm({
+                  ...youtubeForm,
+                  youtubeUrlOrKey: e.target.value,
+                })
+              }
+              placeholder="https://www.youtube.com/watch?v=..."
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            />
+          </label>
+
+          <label className="block text-xs text-white/50 lg:col-span-3">
+            trailer_type
+            <input
+              type="text"
+              value={youtubeForm.trailerType}
+              onChange={(e) =>
+                setYoutubeForm({
+                  ...youtubeForm,
+                  trailerType: e.target.value,
+                })
+              }
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            />
+          </label>
+
+          <label className="block text-xs text-white/50 lg:col-span-2">
+            content_type
+            <select
+              value={youtubeForm.contentType}
+              onChange={(e) =>
+                setYoutubeForm({
+                  ...youtubeForm,
+                  contentType: e.target.value as ContentType,
+                })
+              }
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            >
+              {CONTENT_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block text-xs text-white/50 lg:col-span-5">
+            title optional
+            <input
+              type="text"
+              value={youtubeForm.title}
+              onChange={(e) =>
+                setYoutubeForm({ ...youtubeForm, title: e.target.value })
+              }
+              placeholder="空ならYouTubeから取得"
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            />
+          </label>
+
+          <label className="block text-xs text-white/50 lg:col-span-4">
+            source_url optional
+            <input
+              type="text"
+              value={youtubeForm.sourceUrl}
+              onChange={(e) =>
+                setYoutubeForm({ ...youtubeForm, sourceUrl: e.target.value })
+              }
+              placeholder="空ならwatch URL"
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            />
+          </label>
+
+          <label className="block text-xs text-white/50 lg:col-span-3">
+            curator_note optional
+            <input
+              type="text"
+              value={youtubeForm.curatorNote}
+              onChange={(e) =>
+                setYoutubeForm({
+                  ...youtubeForm,
+                  curatorNote: e.target.value,
+                })
+              }
+              placeholder="確認メモ"
+              className="mt-1 block w-full rounded-lg border border-lobby-border bg-lobby-bg px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+            />
+          </label>
+
+          <div className="flex items-end lg:col-span-12">
+            <button
+              type="submit"
+              disabled={addingYoutube}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-bold text-accent-contrast transition hover:brightness-110 disabled:opacity-50"
+            >
+              {addingYoutube ? "追加中…" : "候補に追加"}
+            </button>
+          </div>
+        </form>
+
+        {youtubeResult ? (
+          <div
+            className={[
+              "mt-4 rounded-lg border px-3 py-2 text-sm",
+              youtubeResult.kind === "success"
+                ? "border-green-500/30 bg-green-500/10 text-green-200"
+                : youtubeResult.kind === "duplicate"
+                  ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-200"
+                  : "border-red-500/30 bg-red-500/10 text-red-200",
+            ].join(" ")}
+          >
+            <div className="font-bold">{youtubeResult.message}</div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs opacity-80">
+              {youtubeResult.title ? <span>{youtubeResult.title}</span> : null}
+              {youtubeResult.youtubeVideoKey ? (
+                <span>{youtubeResult.youtubeVideoKey}</span>
+              ) : null}
+              {youtubeResult.durationSeconds != null ? (
+                <span>{formatSeconds(youtubeResult.durationSeconds)}</span>
+              ) : null}
+              {youtubeResult.adminUrl ? (
+                <Link href={youtubeResult.adminUrl} className="underline">
+                  一覧で確認
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       {/* Summary stats */}
       {(() => {
@@ -420,6 +735,12 @@ export default function CurationPage() {
                       <span>{item.source}</span>
                       <span>•</span>
                       <span>{item.contentType}</span>
+                      {item.trailerType ? (
+                        <>
+                          <span>•</span>
+                          <span>{item.trailerType}</span>
+                        </>
+                      ) : null}
                       {item.channelTitle ? (
                         <>
                           <span>•</span>
@@ -436,6 +757,51 @@ export default function CurationPage() {
                       ) : null}
                     </div>
 
+                    <div className="mt-2 grid gap-1 rounded-lg bg-black/20 px-2 py-2 text-[11px] text-white/50 sm:grid-cols-2">
+                      <div>
+                        <span className="text-white/30">key </span>
+                        <span className="font-mono text-white/70">
+                          {item.primaryVideoKey ?? "unknown"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-white/30">duration </span>
+                        <span>
+                          {formatSeconds(item.durationSeconds)} /{" "}
+                          {formatDurationBucket(item.durationSeconds)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-white/30">official </span>
+                        <span>{item.officialLevel ?? "unknown"}</span>
+                      </div>
+                      <div>
+                        <span className="text-white/30">embed </span>
+                        <span>{item.embedStatus ?? "unknown"}</span>
+                      </div>
+                      {item.sourceUrl ? (
+                        <div className="min-w-0 sm:col-span-2">
+                          <span className="text-white/30">source </span>
+                          <a
+                            href={item.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all text-white/70 underline decoration-white/20 hover:text-white"
+                          >
+                            {item.sourceUrl}
+                          </a>
+                        </div>
+                      ) : null}
+                      {item.curatorNote ? (
+                        <div className="sm:col-span-2">
+                          <span className="text-white/30">note </span>
+                          <span className="text-white/70">
+                            {item.curatorNote}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+
                     {item.tags.length > 0 ? (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {item.tags.map((tag) => (
@@ -448,6 +814,23 @@ export default function CurationPage() {
                         ))}
                       </div>
                     ) : null}
+
+                    {(() => {
+                      const warnings = getApprovalWarnings(item);
+                      return warnings.length > 0 &&
+                        item.curationStatus !== "approved" ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {warnings.map((warning) => (
+                            <span
+                              key={warning}
+                              className="rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-200/80"
+                            >
+                              要確認: {warning}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null;
+                    })()}
 
                     {/* Quick actions */}
                     <div className="mt-2 flex gap-1.5">

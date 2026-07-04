@@ -177,6 +177,20 @@ export function getTopRatedMovies(
   });
 }
 
+export function discoverMovies(
+  page = 1,
+  language = "ja-JP",
+  region = "JP",
+  params: Record<string, string | number | boolean> = {},
+): Promise<TmdbPaginatedResponse> {
+  return tmdbFetch<TmdbPaginatedResponse>("/discover/movie", {
+    page,
+    language,
+    region,
+    ...params,
+  });
+}
+
 export function getMovieDetails(
   tmdbId: number,
   language = "ja-JP",

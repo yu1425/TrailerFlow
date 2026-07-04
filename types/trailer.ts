@@ -12,6 +12,8 @@ export interface TrailerRow {
   published_at: string | null;
   language: string | null;
   country: string | null;
+  /** Future sync target: YouTube Data API ISO 8601 duration parsed to seconds. */
+  duration_seconds?: number | null;
   is_active: boolean | null;
   created_at: string;
 }

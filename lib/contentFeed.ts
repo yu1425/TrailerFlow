@@ -13,7 +13,8 @@ const CONTENT_SELECT = `
   id, content_type, title, original_title, overview, short_copy,
   release_date, language, country, official_url,
   thumbnail_url, poster_url, backdrop_url,
-  quality_score, source, curation_status, is_active,
+  quality_score, source, curation_status, firehose_visible, auto_collected,
+  auto_score, warning_flags, source_type, discovery_reason, is_active,
   created_at, updated_at,
   content_trailers!inner (
     id, content_id, youtube_video_key, title, channel_title, channel_id,
@@ -30,6 +31,7 @@ interface BuildContentFeedOptions {
   limit?: number;
   preferredLanguage?: string | null;
   excludeContentIds?: number[];
+  includeFirehose?: boolean;
 }
 
 function pickBestContentTrailer(
@@ -118,10 +120,17 @@ function scoreContent(
   // shuffles between sessions but high-quality trailers reliably surface first.
   const qScore = qs / 10; // 0–10 range
   const randomness = Math.random() * 3;
-  let score = qScore + randomness;
+  const autoScore = c.auto_score != null ? c.auto_score / 12 : 0;
+  let score = qScore + autoScore + randomness;
 
   if (config.sort === "popularity") score += qScore * 0.5;
   if (excludeSet.has(c.id)) score -= 1000;
+  if (c.firehose_visible && c.curation_status !== "approved") {
+    score += Math.random() * 7 - 2;
+  }
+  if ((c.warning_flags ?? []).length > 0) {
+    score -= (c.warning_flags ?? []).length * 1.8;
+  }
 
   return score;
 }
@@ -221,13 +230,21 @@ async function fetchContentPool(
   channelConfig: ChannelConfig,
   relaxed: boolean,
   excludeIds: number[] = [],
+  includeFirehose = false,
 ): Promise<ContentWithRelations[]> {
   let query = supabase
     .from("contents")
     .select(CONTENT_SELECT)
-    .eq("curation_status", "approved")
     .eq("is_active", true)
     .eq("content_trailers.is_active", true);
+
+  if (includeFirehose) {
+    query = query
+      .or("curation_status.eq.approved,firehose_visible.eq.true")
+      .not("curation_status", "in", "(rejected)");
+  } else {
+    query = query.eq("curation_status", "approved");
+  }
 
   if (!relaxed && excludeIds.length > 0) {
     query = query.not("id", "in", `(${excludeIds.join(",")})`);
@@ -277,8 +294,12 @@ async function fetchContentPool(
           .from("contents")
           .select("id")
           .eq("language", channelConfig.language!)
-          .eq("curation_status", "approved")
-          .eq("is_active", true)
+        .or(
+          includeFirehose
+            ? "curation_status.eq.approved,firehose_visible.eq.true"
+            : "curation_status.eq.approved",
+        )
+        .eq("is_active", true)
           .limit(1000);
         for (const r of langMatches ?? []) candidateIds.add(r.id as number);
       }
@@ -296,7 +317,16 @@ async function fetchContentPool(
 
   const { data, error } = await query.limit(POOL_SIZE);
   if (error) throw error;
-  return (data ?? []) as unknown as ContentWithRelations[];
+  const rows = (data ?? []) as unknown as ContentWithRelations[];
+  if (!includeFirehose) return rows;
+  return rows.filter((row) => {
+    const flags = row.warning_flags ?? [];
+    if (flags.includes("blocked") || flags.includes("embed_disabled")) {
+      return false;
+    }
+    if (flags.includes("reaction") || flags.includes("review")) return false;
+    return true;
+  });
 }
 
 export interface ContentFeedResult {
@@ -315,6 +345,7 @@ export async function buildContentFeed(
   const langPriority = buildLanguagePriority(options.preferredLanguage);
   const excludeIds = options.excludeContentIds ?? [];
   const excludeSet = new Set(excludeIds);
+  const includeFirehose = options.includeFirehose ?? false;
 
   const seen = new Set<number>();
   const ranked: RankedEntry[] = [];
@@ -333,14 +364,26 @@ export async function buildContentFeed(
   };
 
   // Pass 1: strict channel filters + recently-watched exclusion.
-  let pool = await fetchContentPool(supabase, config, false, excludeIds);
+  let pool = await fetchContentPool(
+    supabase,
+    config,
+    false,
+    excludeIds,
+    includeFirehose,
+  );
   if (config.sort === "random") pool = shuffle(pool);
   rankAndCollect(pool, true);
 
   // Pass 2: relax channel filters if the strict pass is thin.
   if (ranked.length < limit) {
     for (const id of excludeIds) seen.add(id);
-    const relaxedPool = await fetchContentPool(supabase, config, true);
+    const relaxedPool = await fetchContentPool(
+      supabase,
+      config,
+      true,
+      [],
+      includeFirehose,
+    );
     rankAndCollect(shuffle(relaxedPool), false);
   }
 
@@ -349,7 +392,13 @@ export async function buildContentFeed(
   // what keeps a small approved pool (e.g. ~20 trailers) looping smoothly.
   if (ranked.length === 0) {
     seen.clear();
-    const relaxedPool = await fetchContentPool(supabase, config, true);
+    const relaxedPool = await fetchContentPool(
+      supabase,
+      config,
+      true,
+      [],
+      includeFirehose,
+    );
     rankAndCollect(shuffle(relaxedPool), false);
   }
 

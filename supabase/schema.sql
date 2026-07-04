@@ -144,6 +144,12 @@ create table if not exists contents (
   quality_score    integer default 50,
   source           text not null default 'manual',
   curation_status  text not null default 'draft',
+  firehose_visible boolean default false,
+  auto_collected   boolean default false,
+  auto_score       integer,
+  warning_flags    jsonb default '[]'::jsonb,
+  source_type      text,
+  discovery_reason text,
   is_active        boolean default true,
   created_at       timestamptz default now(),
   updated_at       timestamptz default now(),
@@ -165,6 +171,16 @@ create index if not exists idx_contents_quality_score   on contents (quality_sco
 create index if not exists idx_contents_source          on contents (source);
 create index if not exists idx_contents_is_active       on contents (is_active);
 create index if not exists idx_contents_release_date    on contents (release_date desc);
+create index if not exists idx_contents_firehose_visible on contents (firehose_visible);
+create index if not exists idx_contents_auto_collected on contents (auto_collected);
+create index if not exists idx_contents_source_type on contents (source_type);
+
+alter table contents add column if not exists firehose_visible boolean default false;
+alter table contents add column if not exists auto_collected boolean default false;
+alter table contents add column if not exists auto_score integer;
+alter table contents add column if not exists warning_flags jsonb default '[]'::jsonb;
+alter table contents add column if not exists source_type text;
+alter table contents add column if not exists discovery_reason text;
 
 -- ---------------------------------------------------------------------------
 -- content_trailers — YouTube trailers linked to curated contents
@@ -179,6 +195,17 @@ create table if not exists content_trailers (
   language          text,
   type              text default 'Trailer',
   official          boolean default true,
+  official_level    text default 'unknown',
+  embed_status      text default 'unknown',
+  source_url        text,
+  duration_seconds  integer,
+  curator_note      text,
+  firehose_visible  boolean default false,
+  auto_collected    boolean default false,
+  auto_score        integer,
+  warning_flags     jsonb default '[]'::jsonb,
+  source_type       text,
+  discovery_reason  text,
   published_at      timestamptz,
   thumbnail_url     text,
   is_active         boolean default true,
@@ -186,8 +213,85 @@ create table if not exists content_trailers (
   unique (youtube_video_key)
 );
 
+alter table content_trailers add column if not exists official_level text default 'unknown';
+alter table content_trailers add column if not exists embed_status text default 'unknown';
+alter table content_trailers add column if not exists source_url text;
+alter table content_trailers add column if not exists duration_seconds integer;
+alter table content_trailers add column if not exists curator_note text;
+alter table content_trailers add column if not exists firehose_visible boolean default false;
+alter table content_trailers add column if not exists auto_collected boolean default false;
+alter table content_trailers add column if not exists auto_score integer;
+alter table content_trailers add column if not exists warning_flags jsonb default '[]'::jsonb;
+alter table content_trailers add column if not exists source_type text;
+alter table content_trailers add column if not exists discovery_reason text;
+
 create index if not exists idx_content_trailers_content_id on content_trailers (content_id);
 create index if not exists idx_content_trailers_is_active  on content_trailers (is_active);
+create index if not exists idx_content_trailers_duration_seconds on content_trailers (duration_seconds);
+create index if not exists idx_content_trailers_firehose_visible on content_trailers (firehose_visible);
+
+-- ---------------------------------------------------------------------------
+-- discovery_sources — continuously expanding Firehose collection sources
+-- ---------------------------------------------------------------------------
+create table if not exists discovery_sources (
+  id                    bigserial primary key,
+  source_type           text not null,
+  name                  text not null,
+  query                 text,
+  params                jsonb default '{}'::jsonb,
+  enabled               boolean default true,
+  priority              integer default 50,
+  last_run_at           timestamptz,
+  next_cursor           text,
+  total_collected_count integer default 0,
+  notes                 text,
+  created_at            timestamptz default now(),
+  updated_at            timestamptz default now(),
+
+  constraint chk_discovery_source_type check (
+    source_type in (
+      'tmdb_list',
+      'tmdb_genre',
+      'youtube_channel',
+      'youtube_search',
+      'rating_list',
+      'festival_awards',
+      'celebrity_recommendations',
+      'manual_seed'
+    )
+  )
+);
+
+create index if not exists idx_discovery_sources_enabled on discovery_sources (enabled);
+create index if not exists idx_discovery_sources_priority on discovery_sources (priority desc);
+create index if not exists idx_discovery_sources_source_type on discovery_sources (source_type);
+
+-- ---------------------------------------------------------------------------
+-- discovery_jobs — one batch execution of a discovery source
+-- ---------------------------------------------------------------------------
+create table if not exists discovery_jobs (
+  id              bigserial primary key,
+  source_id       bigint references discovery_sources(id) on delete set null,
+  status          text not null default 'pending',
+  started_at      timestamptz,
+  finished_at     timestamptz,
+  collected_count integer default 0,
+  duplicate_count integer default 0,
+  skipped_count   integer default 0,
+  error_count     integer default 0,
+  error_message   text,
+  cursor_before   text,
+  cursor_after    text,
+  created_at      timestamptz default now(),
+
+  constraint chk_discovery_job_status check (
+    status in ('pending','running','completed','failed')
+  )
+);
+
+create index if not exists idx_discovery_jobs_source_id on discovery_jobs (source_id);
+create index if not exists idx_discovery_jobs_created_at on discovery_jobs (created_at desc);
+create index if not exists idx_discovery_jobs_status on discovery_jobs (status);
 
 -- ---------------------------------------------------------------------------
 -- content_tags — free-form tags on curated contents

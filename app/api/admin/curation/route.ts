@@ -38,6 +38,22 @@ function toListItem(row: ContentWithRelations): CurationListItem {
     trailerCount: row.content_trailers?.length ?? 0,
     primaryVideoKey: primary?.youtube_video_key ?? null,
     channelTitle: primary?.channel_title ?? null,
+    durationSeconds: primary?.duration_seconds ?? null,
+    trailerType: primary?.type ?? null,
+    officialLevel: primary?.official_level ?? null,
+    embedStatus: primary?.embed_status ?? null,
+    sourceUrl: primary?.source_url ?? null,
+    curatorNote: primary?.curator_note ?? null,
+    firehoseVisible: Boolean(row.firehose_visible || primary?.firehose_visible),
+    autoCollected: Boolean(row.auto_collected || primary?.auto_collected),
+    autoScore: row.auto_score ?? primary?.auto_score ?? null,
+    warningFlags: [
+      ...(row.warning_flags ?? []),
+      ...(primary?.warning_flags ?? []),
+    ],
+    sourceType: row.source_type ?? primary?.source_type ?? null,
+    discoveryReason:
+      row.discovery_reason ?? primary?.discovery_reason ?? null,
     tags: (row.content_tags ?? []).map((t) => t.tag),
     createdAt: row.created_at,
   };

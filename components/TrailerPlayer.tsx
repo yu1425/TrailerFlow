@@ -17,6 +17,7 @@ export interface TrailerPlayerProps {
   muted: boolean;
   onReady?: () => void;
   onPlay?: () => void;
+  onDuration?: (seconds: number) => void;
   onEnded?: () => void;
   onError?: (error: unknown) => void;
   /** Receives playback stats getters once the player is ready. */
@@ -38,6 +39,7 @@ export default function TrailerPlayer({
   muted,
   onReady,
   onPlay,
+  onDuration,
   onEnded,
   onError,
   onStats,
@@ -46,11 +48,43 @@ export default function TrailerPlayer({
   const playerRef = useRef<YTPlayer | null>(null);
   const readyRef = useRef(false);
   const currentKeyRef = useRef<string>(videoKey);
+  const durationSentRef = useRef(false);
+  const durationPollRef = useRef<number | null>(null);
 
   // Keep latest callbacks in refs so the player effect doesn't re-run on every
   // parent render.
-  const cbRef = useRef({ onReady, onPlay, onEnded, onError, onStats });
-  cbRef.current = { onReady, onPlay, onEnded, onError, onStats };
+  const cbRef = useRef({
+    onReady,
+    onPlay,
+    onDuration,
+    onEnded,
+    onError,
+    onStats,
+  });
+  cbRef.current = { onReady, onPlay, onDuration, onEnded, onError, onStats };
+
+  const clearDurationPoll = () => {
+    if (durationPollRef.current) {
+      window.clearTimeout(durationPollRef.current);
+      durationPollRef.current = null;
+    }
+  };
+
+  const reportDurationWhenAvailable = (attempt = 0) => {
+    if (durationSentRef.current) return;
+    const duration = Math.round(playerRef.current?.getDuration() ?? 0);
+    if (duration > 0) {
+      durationSentRef.current = true;
+      cbRef.current.onDuration?.(duration);
+      return;
+    }
+    if (attempt >= 12) return;
+    clearDurationPoll();
+    durationPollRef.current = window.setTimeout(
+      () => reportDurationWhenAvailable(attempt + 1),
+      250,
+    );
+  };
 
   // Create the player once.
   useEffect(() => {
@@ -100,12 +134,14 @@ export default function TrailerPlayer({
               };
               cbRef.current.onStats?.(handle);
               cbRef.current.onReady?.();
+              reportDurationWhenAvailable();
             },
             onStateChange: (event) => {
               if (event.data === YT.PlayerState.ENDED) {
                 cbRef.current.onEnded?.();
               } else if (event.data === YT.PlayerState.PLAYING) {
                 cbRef.current.onPlay?.();
+                reportDurationWhenAvailable();
               }
             },
             onError: (event) => {
@@ -121,6 +157,7 @@ export default function TrailerPlayer({
     return () => {
       cancelled = true;
       readyRef.current = false;
+      clearDurationPoll();
       try {
         playerRef.current?.destroy();
       } catch {
@@ -138,12 +175,15 @@ export default function TrailerPlayer({
       return;
     }
     currentKeyRef.current = videoKey;
+    durationSentRef.current = false;
+    clearDurationPoll();
     if (playerRef.current && readyRef.current) {
       if (autoplay) {
         playerRef.current.loadVideoById(videoKey);
       } else {
         playerRef.current.cueVideoById(videoKey);
       }
+      reportDurationWhenAvailable();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoKey]);

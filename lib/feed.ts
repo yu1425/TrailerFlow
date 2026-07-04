@@ -225,14 +225,69 @@ export const TMDB_CHANNELS: ChannelDefinition[] = [
   },
 ];
 
+export const FIREHOSE_CHANNELS: ChannelDefinition[] = [
+  {
+    id: "lobby",
+    name: "ロビー",
+    description: "巨大な予告編棚からバランスよく",
+    config: { sort: "balanced" },
+    visible: true,
+  },
+  {
+    id: "firehose-random",
+    name: "ランダム発掘",
+    description: "当たり外れごと浴びる",
+    config: { sort: "random" },
+    visible: true,
+  },
+  {
+    id: "firehose-sf",
+    name: "SF",
+    description: "SFっぽい予告編",
+    config: { contentTags: ["SF", "sf", "tmdb_genre:878"] },
+    visible: true,
+  },
+  {
+    id: "firehose-horror",
+    name: "ホラー",
+    description: "ホラー・怪奇・スリラー",
+    config: { contentTags: ["ホラー", "horror", "tmdb_genre:27"] },
+    visible: true,
+  },
+  {
+    id: "firehose-action",
+    name: "アクション",
+    description: "アクション映画やゲームトレーラー",
+    config: { contentTags: ["アクション", "action", "tmdb_genre:28"] },
+    visible: true,
+  },
+  {
+    id: "firehose-animation",
+    name: "アニメ",
+    description: "アニメPV・アニメーション",
+    config: { contentTypes: ["anime"], contentTags: ["アニメ", "animation", "tmdb_genre:16"] },
+    visible: true,
+  },
+  {
+    id: "firehose-game",
+    name: "ゲーム",
+    description: "ゲームトレーラー",
+    config: { contentTypes: ["game"], contentTags: ["ゲーム", "game"] },
+    visible: true,
+  },
+];
+
 /** All channel definitions (Manual + TMDb). Used by getChannel(). */
-const ALL_CHANNELS = [...CHANNELS, ...TMDB_CHANNELS];
+const ALL_CHANNELS = [...CHANNELS, ...TMDB_CHANNELS, ...FIREHOSE_CHANNELS];
 
 /** Channels visible in the public UI (player bar, /channels page). */
 export const VISIBLE_CHANNELS = CHANNELS.filter((c) => c.visible !== false);
 
 /** Returns the channel list appropriate for the given data mode. */
 export function getChannelsForMode(mode: string): ChannelDefinition[] {
+  if (mode === "firehose") {
+    return FIREHOSE_CHANNELS.filter((c) => c.visible !== false);
+  }
   if (mode === "tmdb") return TMDB_CHANNELS.filter((c) => c.visible !== false);
   return CHANNELS.filter((c) => c.visible !== false);
 }
@@ -247,6 +302,7 @@ export function getChannel(id: string | null | undefined): ChannelDefinition {
 
 const DEFAULT_LANGUAGE_PRIORITY = ["ja-JP", "ja", "en-US", "en"];
 const NAME_KEYWORDS = ["official trailer", "本予告", "予告", "trailer"];
+const LONG_TRAILER_SECONDS = 4 * 60 + 30;
 
 /**
  * Builds the language preference order. `preferred` is an ISO 639-1 code
@@ -348,6 +404,11 @@ interface BuildFeedOptions {
   preferredLanguage?: string | null;
   /** Movie ids to strongly exclude (recently watched on this client). */
   excludeMovieIds?: number[];
+  /**
+   * YouTube video keys that played long in this browser. TMDb mode uses this
+   * as a soft penalty so they sink below fresher, shorter-feeling trailers.
+   */
+  deprioritizedVideoKeys?: string[];
 }
 
 interface ProfileSubset {
@@ -479,6 +540,25 @@ function scoreMovie(
   return score;
 }
 
+function scoreTrailerDurationPenalty(
+  trailer: TrailerRow | null,
+  deprioritizedVideoKeys: Set<string>,
+): number {
+  if (!trailer) return -1000;
+  // `duration_seconds` is not selected today because the column is not present
+  // in all environments. The optional field is the future sync-time hook for
+  // YouTube Data API duration once the schema is migrated.
+  const knownDurationPenalty =
+    typeof trailer.duration_seconds === "number" &&
+    trailer.duration_seconds >= LONG_TRAILER_SECONDS
+      ? -80
+      : 0;
+  const localPlaybackPenalty = deprioritizedVideoKeys.has(trailer.video_key)
+    ? -80
+    : 0;
+  return knownDurationPenalty + localPlaybackPenalty;
+}
+
 function toFeedItem(
   movie: MovieWithRelations,
   languagePriority: string[],
@@ -525,6 +605,7 @@ export async function buildFeed(
   const config = channel.config;
   const languagePriority = buildLanguagePriority(options.preferredLanguage);
   const excludeMovieIds = options.excludeMovieIds ?? [];
+  const deprioritizedVideoKeys = new Set(options.deprioritizedVideoKeys ?? []);
 
   const profile = await loadProfile(supabase, anonymousUserId);
   const watchedSet = new Set(profile.watched_movie_ids);
@@ -534,7 +615,15 @@ export async function buildFeed(
 
   const rankAndCollect = (pool: MovieWithRelations[]) => {
     const ranked = pool
-      .map((m) => ({ m, score: scoreMovie(m, profile, config, watchedSet) }))
+      .map((m) => {
+        const best = pickBestTrailerRow(m.trailers, languagePriority);
+        return {
+          m,
+          score:
+            scoreMovie(m, profile, config, watchedSet) +
+            scoreTrailerDurationPenalty(best, deprioritizedVideoKeys),
+        };
+      })
       .sort((a, b) => b.score - a.score);
 
     for (const { m } of ranked) {

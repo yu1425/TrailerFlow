@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
  *   "manual" → curated contents only
  *   "tmdb"   → TMDb movies only (original behaviour)
  *   "mixed"  → curated first, TMDb fallback
+ *   "firehose" → approved + firehose-visible discovery candidates
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -22,6 +23,7 @@ export async function GET(request: Request) {
   const limitParam = searchParams.get("limit");
   const preferredLanguage = searchParams.get("preferredLanguage");
   const excludeParam = searchParams.get("recentlyWatchedMovieIds");
+  const deprioritizedParam = searchParams.get("deprioritizedVideoKeys");
 
   if (!anonymousUserId) {
     return NextResponse.json(
@@ -39,6 +41,11 @@ export async function GET(request: Request) {
     .map((s) => Number.parseInt(s, 10))
     .filter((n) => Number.isFinite(n))
     .slice(0, 300);
+  const deprioritizedVideoKeys = (deprioritizedParam ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^[A-Za-z0-9_-]{6,}$/.test(s))
+    .slice(0, 300);
 
   try {
     const supabase = getSupabaseServiceClient();
@@ -48,13 +55,14 @@ export async function GET(request: Request) {
     let strictMatchCount = 0;
     let totalCandidates = 0;
 
-    if (mode === "manual" || mode === "mixed") {
+    if (mode === "manual" || mode === "mixed" || mode === "firehose") {
       const result = await buildContentFeed(supabase, {
         anonymousUserId,
         channel,
         limit,
         preferredLanguage,
         excludeContentIds: excludeMovieIds,
+        includeFirehose: mode === "firehose",
       });
       items = result.items;
       strictMatchCount = result.strictMatchCount;
@@ -71,6 +79,10 @@ export async function GET(request: Request) {
         limit: limit - items.length,
         preferredLanguage,
         excludeMovieIds: [...excludeMovieIds, ...contentIds],
+        deprioritizedVideoKeys:
+          mode === "tmdb" || mode === "firehose"
+            ? deprioritizedVideoKeys
+            : [],
       });
       // Tag TMDb items for debugging.
       for (const it of tmdbItems) it.source = "tmdb";
