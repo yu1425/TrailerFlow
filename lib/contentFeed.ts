@@ -9,7 +9,24 @@ import { getChannel, buildLanguagePriority } from "@/lib/feed";
  * instead of the TMDb-derived movies/trailers tables.
  */
 
-const CONTENT_SELECT = `
+// Base column set: guaranteed present since the original schema.sql. Used for
+// "manual" and "mixed" modes so /api/feed never depends on the firehose/
+// discovery migration (supabase/alter-firehose-discovery.sql) having been
+// applied — those columns are only requested when includeFirehose is true.
+const CONTENT_BASE_SELECT = `
+  id, content_type, title, original_title, overview, short_copy,
+  release_date, language, country, official_url,
+  thumbnail_url, poster_url, backdrop_url,
+  quality_score, source, curation_status, is_active,
+  created_at, updated_at,
+  content_trailers!inner (
+    id, content_id, youtube_video_key, title, channel_title, channel_id,
+    language, type, official, published_at, thumbnail_url, is_active, created_at
+  ),
+  content_tags ( tag )
+`;
+
+const CONTENT_FIREHOSE_SELECT = `
   id, content_type, title, original_title, overview, short_copy,
   release_date, language, country, official_url,
   thumbnail_url, poster_url, backdrop_url,
@@ -234,7 +251,7 @@ async function fetchContentPool(
 ): Promise<ContentWithRelations[]> {
   let query = supabase
     .from("contents")
-    .select(CONTENT_SELECT)
+    .select(includeFirehose ? CONTENT_FIREHOSE_SELECT : CONTENT_BASE_SELECT)
     .eq("is_active", true)
     .eq("content_trailers.is_active", true);
 
