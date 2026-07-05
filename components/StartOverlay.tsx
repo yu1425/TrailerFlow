@@ -2,13 +2,18 @@
 
 export interface StartOverlayProps {
   onStart: () => void;
+  /** True when a saved "sound on" preference will be tried on start. */
+  willStartUnmuted?: boolean;
 }
 
 /**
  * Full-screen entry gate. Required because browsers block autoplay until the
  * user interacts — the button click is that interaction.
  */
-export default function StartOverlay({ onStart }: StartOverlayProps) {
+export default function StartOverlay({
+  onStart,
+  willStartUnmuted = false,
+}: StartOverlayProps) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-lobby-bg px-6 text-center">
       <div
@@ -41,7 +46,9 @@ export default function StartOverlay({ onStart }: StartOverlayProps) {
         </button>
 
         <p className="mt-6 max-w-xs text-xs text-white/40">
-          ミュートからはじまります。下のミュートボタンで音声をオンにできます。
+          {willStartUnmuted
+            ? "前回の音声設定で再生します。"
+            : "ミュートからはじまります。下のミュートボタンで音声をオンにできます。"}
         </p>
       </div>
     </div>

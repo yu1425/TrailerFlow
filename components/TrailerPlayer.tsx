@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { loadYouTubeApi, type YTPlayer } from "@/lib/youtube";
+import { loadYouTubeApi, type YTNamespace, type YTPlayer } from "@/lib/youtube";
 
 export interface TrailerPlayerHandle {
   getWatchSeconds: () => number;
@@ -22,7 +22,18 @@ export interface TrailerPlayerProps {
   onError?: (error: unknown) => void;
   /** Receives playback stats getters once the player is ready. */
   onStats?: (handle: TrailerPlayerHandle) => void;
+  /**
+   * Called when an unmuted autoplay attempt was silently blocked by the
+   * browser and the player fell back to muted playback so it could start at
+   * all. Parent should reflect `muted: true` in its own state.
+   */
+  onAutoplayMuted?: () => void;
 }
+
+// How long to wait after requesting unmuted autoplay before checking whether
+// the browser actually honoured it. Long enough for slow players to reach
+// PLAYING, short enough that a blocked attempt doesn't sit silent for long.
+const AUTOPLAY_UNMUTE_CHECK_MS = 1200;
 
 /**
  * Wraps the YouTube IFrame Player API.
@@ -43,9 +54,11 @@ export default function TrailerPlayer({
   onEnded,
   onError,
   onStats,
+  onAutoplayMuted,
 }: TrailerPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
+  const ytRef = useRef<YTNamespace | null>(null);
   const readyRef = useRef(false);
   const currentKeyRef = useRef<string>(videoKey);
   const durationSentRef = useRef(false);
@@ -60,8 +73,48 @@ export default function TrailerPlayer({
     onEnded,
     onError,
     onStats,
+    onAutoplayMuted,
   });
-  cbRef.current = { onReady, onPlay, onDuration, onEnded, onError, onStats };
+  cbRef.current = {
+    onReady,
+    onPlay,
+    onDuration,
+    onEnded,
+    onError,
+    onStats,
+    onAutoplayMuted,
+  };
+
+  // Some browsers silently block unmuted autoplay (or force-mute it) rather
+  // than raising an error. If we asked for unmuted playback, check shortly
+  // after whether it actually took — if not, fall back to muted playback so
+  // the trailer still starts, and let the parent know so its UI/state stays
+  // in sync.
+  const scheduleAutoplayFallbackCheck = () => {
+    window.setTimeout(() => {
+      const p = playerRef.current;
+      const YT = ytRef.current;
+      if (!p || !YT) return;
+      let stillMuted = false;
+      try {
+        stillMuted = p.isMuted();
+      } catch {
+        stillMuted = false;
+      }
+      const state = p.getPlayerState();
+      const notPlaying =
+        state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.BUFFERING;
+      if (stillMuted || notPlaying) {
+        try {
+          p.mute();
+          p.playVideo();
+        } catch {
+          // ignore
+        }
+        cbRef.current.onAutoplayMuted?.();
+      }
+    }, AUTOPLAY_UNMUTE_CHECK_MS);
+  };
 
   const clearDurationPoll = () => {
     if (durationPollRef.current) {
@@ -93,6 +146,7 @@ export default function TrailerPlayer({
     loadYouTubeApi()
       .then((YT) => {
         if (cancelled || !containerRef.current) return;
+        ytRef.current = YT;
 
         playerRef.current = new YT.Player(containerRef.current, {
           width: "100%",
@@ -113,6 +167,7 @@ export default function TrailerPlayer({
               if (muted) playerRef.current?.mute();
               else playerRef.current?.unMute();
               if (autoplay) playerRef.current?.playVideo();
+              if (autoplay && !muted) scheduleAutoplayFallbackCheck();
 
               const handle: TrailerPlayerHandle = {
                 getWatchSeconds: () =>
@@ -180,6 +235,7 @@ export default function TrailerPlayer({
     if (playerRef.current && readyRef.current) {
       if (autoplay) {
         playerRef.current.loadVideoById(videoKey);
+        if (!muted) scheduleAutoplayFallbackCheck();
       } else {
         playerRef.current.cueVideoById(videoKey);
       }

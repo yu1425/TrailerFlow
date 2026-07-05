@@ -76,7 +76,7 @@ export default function ActionBar({
       <ActionButton label="次へ" icon="⏭" onClick={onNext} />
       <ActionButton label="詳細" icon="ℹ" onClick={onDetails} />
       <ActionButton
-        label={muted ? "ミュート中" : "ミュート"}
+        label={muted ? "ミュート中" : "音声ON"}
         icon={muted ? "🔇" : "🔊"}
         onClick={onMuteToggle}
         active={muted}

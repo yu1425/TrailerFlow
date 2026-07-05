@@ -33,6 +33,8 @@ const DATA_MODE =
 const REFILL_THRESHOLD = 3;
 const DEFAULT_CHANNEL = "lobby";
 const CHANNEL_STORAGE_KEY = "trailerflow.channel";
+const MUTED_STORAGE_KEY = "trailerflow.muted";
+const AUTOPLAY_MUTED_NOTICE_MS = 4000;
 const LONG_TRAILER_KEYS_STORAGE_KEY = "trailerflow.tmdb.longTrailerKeys";
 const LONG_TRAILER_SECONDS = 4 * 60 + 30;
 const MAX_LONG_TRAILER_KEYS = 200;
@@ -86,9 +88,12 @@ export default function HomePage() {
   const [selectedChannel, setSelectedChannel] = useState(DEFAULT_CHANNEL);
   const [hasStarted, setHasStarted] = useState(false);
   // Start muted so the YouTube IFrame autoplay policy lets the first trailer
-  // roll immediately after the StartOverlay click. Visitors can flip the
-  // ActionBar's mute button to bring sound back.
+  // roll immediately after the StartOverlay click, and so server/client
+  // render match (no localStorage on the server). Once mounted, the first-
+  // mount effect below restores the visitor's saved preference — if they
+  // previously turned sound on, we try unmuted from then on.
   const [muted, setMuted] = useState(true);
+  const [autoplayMutedNotice, setAutoplayMutedNotice] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [watchlistedIds, setWatchlistedIds] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
@@ -200,6 +205,9 @@ export default function HomePage() {
     setLongTrailerKeys(
       new Set(readStoredJsonArray(LONG_TRAILER_KEYS_STORAGE_KEY)),
     );
+    // Only an explicit "false" opts back into unmuted playback; any other
+    // value (missing, "true", corrupted) keeps the muted-by-default start.
+    setMuted(readStored(MUTED_STORAGE_KEY, "true") !== "false");
 
     // Watchlist state (best-effort, non-blocking).
     fetch(`/api/watchlist?anonymousUserId=${encodeURIComponent(userId)}`, {
@@ -266,6 +274,15 @@ export default function HomePage() {
     const t = setTimeout(() => setIsTransitioning(false), TRANSITION_SAFETY_MS);
     return () => clearTimeout(t);
   }, [isTransitioning, currentIndex]);
+
+  useEffect(() => {
+    if (!autoplayMutedNotice) return;
+    const t = setTimeout(
+      () => setAutoplayMutedNotice(false),
+      AUTOPLAY_MUTED_NOTICE_MS,
+    );
+    return () => clearTimeout(t);
+  }, [autoplayMutedNotice]);
 
   // --- Playback control ----------------------------------------------------
 
@@ -368,6 +385,24 @@ export default function HomePage() {
     advance();
   }, [advance]);
 
+  // User-initiated mute toggles (button/keyboard) persist the preference so
+  // the next visit tries the same audio state. Distinct from the autoplay
+  // fallback below, which flips `muted` back to true without touching the
+  // saved preference — a one-off autoplay block shouldn't erase the user's
+  // "I want sound" choice for future visits.
+  const toggleMuted = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      persist(MUTED_STORAGE_KEY, next ? "true" : "false");
+      return next;
+    });
+  }, []);
+
+  const handleAutoplayMuted = useCallback(() => {
+    setMuted(true);
+    setAutoplayMutedNotice(true);
+  }, []);
+
   const handleLike = useCallback(() => {
     emit("like");
   }, [emit]);
@@ -456,7 +491,7 @@ export default function HomePage() {
           break;
         case "m":
         case "M":
-          setMuted((mu) => !mu);
+          toggleMuted();
           break;
         case "?":
           shortcuts.toggle();
@@ -467,7 +502,15 @@ export default function HomePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hasStarted, handleNext, handleWatchlist, handleLike, handleDislike, shortcuts]);
+  }, [
+    hasStarted,
+    handleNext,
+    handleWatchlist,
+    handleLike,
+    handleDislike,
+    toggleMuted,
+    shortcuts,
+  ]);
 
   // --- Derived render state ------------------------------------------------
 
@@ -553,11 +596,17 @@ export default function HomePage() {
                   onStats={(handle) => {
                     statsRef.current = handle;
                   }}
+                  onAutoplayMuted={handleAutoplayMuted}
                 />
                 <NextUpOverlay
                   visible={isTransitioning}
                   title={currentItem.movie.title}
                 />
+                {autoplayMutedNotice ? (
+                  <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-full bg-black/80 px-4 py-2 text-xs text-white/90 shadow-lg ring-1 ring-white/15">
+                    ブラウザによりミュートで開始しました
+                  </div>
+                ) : null}
                 {isLongTmdbTrailer ? (
                   <div className="pointer-events-none absolute left-4 top-4 z-20 rounded bg-black/70 px-3 py-1.5 text-xs font-bold text-white shadow-lg ring-1 ring-white/15">
                     長めの予告 {formatDuration(currentDurationSeconds)}
@@ -632,7 +681,7 @@ export default function HomePage() {
               onDislike={handleDislike}
               onWatchlist={handleWatchlist}
               onDetails={handleDetails}
-              onMuteToggle={() => setMuted((m) => !m)}
+              onMuteToggle={toggleMuted}
               muted={muted}
               isWatchlisted={isWatchlisted}
             />
@@ -670,7 +719,10 @@ export default function HomePage() {
       ) : isLoading && !hasStarted ? (
         <LobbyLoading />
       ) : !hasStarted && !feedEmpty ? (
-        <StartOverlay onStart={() => setHasStarted(true)} />
+        <StartOverlay
+          onStart={() => setHasStarted(true)}
+          willStartUnmuted={!muted}
+        />
       ) : null}
 
       {/* Dev tooling */}

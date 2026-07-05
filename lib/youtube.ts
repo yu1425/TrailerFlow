@@ -32,6 +32,7 @@ export interface YTPlayer {
   pauseVideo(): void;
   mute(): void;
   unMute(): void;
+  isMuted(): boolean;
   getDuration(): number;
   getCurrentTime(): number;
   getPlayerState(): number;
